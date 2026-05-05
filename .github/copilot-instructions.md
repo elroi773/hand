@@ -1,0 +1,5 @@
+- Workspace: Hand Book Demo
+- Frontend stack: Vite + React + TypeScript + three.js
+- Backend stack: Python + OpenCV + MediaPipe + FastAPI WebSocket
+- Keep the experience playful, simple, and cinematic.
+- Keep code changes focused and update README when setup changes.
