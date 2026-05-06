@@ -12,9 +12,15 @@ export type HandSnapshot = {
   leftHandDetected: boolean
   leftHandX: number
   leftHandY: number
+  leftPalmCenterX: number
+  leftPalmCenterY: number
+  leftPalmOpenScore: number
   rightHandDetected: boolean
   rightHandX: number
   rightHandY: number
+  rightPalmCenterX: number
+  rightPalmCenterY: number
+  rightPalmOpenScore: number
   // legacy
   handDetected: boolean
   openHand: boolean
@@ -34,9 +40,15 @@ const fallbackState: HandSnapshot = {
   leftHandDetected: false,
   leftHandX: 0.3,
   leftHandY: 0.7,
+  leftPalmCenterX: 0.3,
+  leftPalmCenterY: 0.7,
+  leftPalmOpenScore: 0,
   rightHandDetected: false,
   rightHandX: 0.7,
   rightHandY: 0.7,
+  rightPalmCenterX: 0.7,
+  rightPalmCenterY: 0.7,
+  rightPalmOpenScore: 0,
   handDetected: false,
   openHand: false,
   confidence: 0,
@@ -116,9 +128,15 @@ export function useHandStream() {
             leftHandDetected:   raw.leftHandDetected   ?? false,
             leftHandX:          raw.leftHandX          ?? 0.3,
             leftHandY:          raw.leftHandY          ?? 0.7,
+            leftPalmCenterX:    raw.leftPalmCenterX    ?? (raw.leftHandX  ?? 0.3),
+            leftPalmCenterY:    raw.leftPalmCenterY    ?? (raw.leftHandY  ?? 0.7),
+            leftPalmOpenScore:  raw.leftPalmOpenScore  ?? 0,
             rightHandDetected:  raw.rightHandDetected  ?? false,
             rightHandX:         raw.rightHandX         ?? 0.7,
             rightHandY:         raw.rightHandY         ?? 0.7,
+            rightPalmCenterX:   raw.rightPalmCenterX   ?? (raw.rightHandX ?? 0.7),
+            rightPalmCenterY:   raw.rightPalmCenterY   ?? (raw.rightHandY ?? 0.7),
+            rightPalmOpenScore: raw.rightPalmOpenScore ?? 0,
             handDetected:       raw.handDetected       ?? false,
             openHand:           raw.openHand           ?? false,
             confidence:         raw.confidence         ?? 0,
