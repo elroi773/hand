@@ -41,11 +41,11 @@ export function DebugOverlay({ hand, tracking, connection, lastPacketAt, cameraA
   const wH = window.innerHeight
 
   const dots: DotDef[] = [
-    { label: 'face',     color: '#ff5555', normX: hand.faceCx,       normY: hand.faceCy,       show: hand.faceDetected },
-    { label: 'forehead', color: '#55ff88', normX: hand.faceCx,       normY: hand.faceForeheadY, show: hand.faceDetected },
-    { label: 'L hand',   color: '#55aaff', normX: hand.leftHandX,    normY: hand.leftHandY,    show: hand.leftHandDetected },
-    { label: 'R hand',   color: '#ffaa33', normX: hand.rightHandX,   normY: hand.rightHandY,   show: hand.rightHandDetected },
-    { label: 'midpoint', color: '#ffffff', normX: tracking.spawnX,   normY: tracking.spawnY,   show: hand.leftHandDetected && hand.rightHandDetected },
+    { label: 'face',    color: '#ff5555', normX: hand.faceCx,          normY: hand.faceCy,          show: hand.faceDetected },
+    { label: 'forehead',color: '#55ff88', normX: hand.faceCx,          normY: hand.faceForeheadY,   show: hand.faceDetected },
+    { label: 'L palm',  color: '#55aaff', normX: hand.leftPalmCenterX, normY: hand.leftPalmCenterY, show: hand.leftHandDetected },
+    { label: 'R palm',  color: '#ffaa33', normX: hand.rightPalmCenterX,normY: hand.rightPalmCenterY,show: hand.rightHandDetected },
+    { label: 'spawn',   color: '#ffffff', normX: tracking.spawnX,      normY: tracking.spawnY,      show: hand.leftHandDetected || hand.rightHandDetected },
   ]
 
   const connColor = connection === 'connected' ? '#55ff88' : connection === 'connecting' ? '#ffcc44' : '#ff5555'
@@ -76,6 +76,20 @@ export function DebugOverlay({ hand, tracking, connection, lastPacketAt, cameraA
           <span>face: <b style={{ color: hand.faceDetected ? '#55ff88' : '#aaa' }}>{hand.faceDetected ? '✓' : '✗'}</b></span>
           <span>  L: <b style={{ color: hand.leftHandDetected ? '#55aaff' : '#aaa' }}>{hand.leftHandDetected ? '✓' : '✗'}</b></span>
           <span>  R: <b style={{ color: hand.rightHandDetected ? '#ffaa33' : '#aaa' }}>{hand.rightHandDetected ? '✓' : '✗'}</b></span>
+        </div>
+        <div className="dbg-row">
+          <span>L palm ctr: <b style={{ color: '#55aaff' }}>
+            {hand.leftHandDetected ? `${hand.leftPalmCenterX.toFixed(2)},${hand.leftPalmCenterY.toFixed(2)}` : '—'}
+          </b></span>
+        </div>
+        <div className="dbg-row">
+          <span>R palm ctr: <b style={{ color: '#ffaa33' }}>
+            {hand.rightHandDetected ? `${hand.rightPalmCenterX.toFixed(2)},${hand.rightPalmCenterY.toFixed(2)}` : '—'}
+          </b></span>
+        </div>
+        <div className="dbg-row">
+          <span>palm open L: <b style={{ color: hand.leftPalmOpenScore >= 0.45 ? '#55ff88' : '#ffaa33' }}>{pct(hand.leftPalmOpenScore)}</b></span>
+          <span>  R: <b style={{ color: hand.rightPalmOpenScore >= 0.45 ? '#55ff88' : '#ffaa33' }}>{pct(hand.rightPalmOpenScore)}</b></span>
         </div>
 
         <div className="dbg-divider" />
