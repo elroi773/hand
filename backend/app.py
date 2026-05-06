@@ -24,9 +24,15 @@ class HandState:
     leftHandDetected: bool
     leftHandX: float
     leftHandY: float
+    leftPalmCenterX: float
+    leftPalmCenterY: float
+    leftPalmOpenScore: float
     rightHandDetected: bool
     rightHandX: float
     rightHandY: float
+    rightPalmCenterX: float
+    rightPalmCenterY: float
+    rightPalmOpenScore: float
     # legacy single-hand fields kept for backward compat
     handDetected: bool
     openHand: bool
@@ -55,9 +61,15 @@ latest_state = HandState(
     leftHandDetected=False,
     leftHandX=0.3,
     leftHandY=0.7,
+    leftPalmCenterX=0.3,
+    leftPalmCenterY=0.7,
+    leftPalmOpenScore=0.0,
     rightHandDetected=False,
     rightHandX=0.7,
     rightHandY=0.7,
+    rightPalmCenterX=0.7,
+    rightPalmCenterY=0.7,
+    rightPalmOpenScore=0.0,
     handDetected=False,
     openHand=False,
     confidence=0.0,
@@ -77,6 +89,34 @@ def _finger_is_extended(landmarks: list[Any], tip: int, pip: int) -> bool:
 
 def _thumb_is_extended(landmarks: list[Any]) -> bool:
     return abs(landmarks[4].x - landmarks[2].x) > 0.06
+
+
+def _palm_open_score(landmarks: list[Any]) -> float:
+    """Score 0-1: how open and spread the palm is.
+    High score = fingers extended + knuckles spread (book-holding pose)."""
+    ext = [
+        landmarks[8].y  < landmarks[6].y,                # index
+        landmarks[12].y < landmarks[10].y,               # middle
+        landmarks[16].y < landmarks[14].y,               # ring
+        landmarks[20].y < landmarks[18].y,               # pinky
+        abs(landmarks[4].x - landmarks[2].x) > 0.05,    # thumb
+    ]
+    ext_score = sum(1 for e in ext if e) / 5.0
+
+    # How wide the MCP (knuckle) row is spread
+    mcp_xs = [landmarks[5].x, landmarks[9].x, landmarks[13].x, landmarks[17].x]
+    mcp_spread = max(mcp_xs) - min(mcp_xs)
+    spread_score = min(1.0, mcp_spread / 0.11)
+
+    return round(ext_score * 0.65 + spread_score * 0.35, 3)
+
+
+def _palm_center(landmarks: list[Any]) -> tuple[float, float]:
+    """Stable palm center: average of wrist (0) + 4 MCP knuckle joints (5,9,13,17)."""
+    idx = [0, 5, 9, 13, 17]
+    x = round(sum(landmarks[i].x for i in idx) / len(idx), 4)
+    y = round(sum(landmarks[i].y for i in idx) / len(idx), 4)
+    return x, y
 
 
 def _to_payload(state: HandState) -> dict[str, Any]:
@@ -155,7 +195,11 @@ def _capture_loop() -> None:
                         faceCount=0,
                         faceCx=0.5, faceCy=0.3, faceForeheadY=0.15,
                         leftHandDetected=False, leftHandX=0.3, leftHandY=0.7,
+                        leftPalmCenterX=0.3, leftPalmCenterY=0.7,
+                        leftPalmOpenScore=0.0,
                         rightHandDetected=False, rightHandX=0.7, rightHandY=0.7,
+                        rightPalmCenterX=0.7, rightPalmCenterY=0.7,
+                        rightPalmOpenScore=0.0,
                         handDetected=False, openHand=False, confidence=0.0,
                         x=0.5, y=0.6,
                         message=f'camera not available. tried {camera_label} ({active_backend}, idx={selected_index})',
@@ -173,7 +217,11 @@ def _capture_loop() -> None:
                     faceDetected=False, faceCount=0,
                     faceCx=0.5, faceCy=0.3, faceForeheadY=0.15,
                     leftHandDetected=False, leftHandX=0.3, leftHandY=0.7,
+                    leftPalmCenterX=0.3, leftPalmCenterY=0.7,
+                    leftPalmOpenScore=0.0,
                     rightHandDetected=False, rightHandX=0.7, rightHandY=0.7,
+                    rightPalmCenterX=0.7, rightPalmCenterY=0.7,
+                    rightPalmOpenScore=0.0,
                     handDetected=False, openHand=False, confidence=0.0,
                     x=0.5, y=0.6,
                     message=f'camera ready on index {active_camera_index} using {active_backend}',
@@ -188,7 +236,11 @@ def _capture_loop() -> None:
                     faceDetected=False, faceCount=0,
                     faceCx=0.5, faceCy=0.3, faceForeheadY=0.15,
                     leftHandDetected=False, leftHandX=0.3, leftHandY=0.7,
+                    leftPalmCenterX=0.3, leftPalmCenterY=0.7,
+                    leftPalmOpenScore=0.0,
                     rightHandDetected=False, rightHandX=0.7, rightHandY=0.7,
+                    rightPalmCenterX=0.7, rightPalmCenterY=0.7,
+                    rightPalmOpenScore=0.0,
                     handDetected=False, openHand=False, confidence=0.0,
                     x=0.5, y=0.6,
                     message='camera frame unavailable. retrying',
@@ -240,10 +292,14 @@ def _capture_loop() -> None:
                     _thumb_is_extended(landmarks),
                 ]
                 open_count = sum(1 for e in extended if e)
+                palm_score = _palm_open_score(landmarks)
+                pcx, pcy = _palm_center(landmarks)
                 detected_hands.append({
                     'x': cx, 'y': cy,
+                    'palmCx': pcx, 'palmCy': pcy,
                     'openHand': open_count >= 4,
                     'confidence': min(1.0, 0.45 + open_count * 0.11),
+                    'palmOpenScore': palm_score,
                 })
 
         # Assign left/right by x position
@@ -279,9 +335,15 @@ def _capture_loop() -> None:
             leftHandDetected=left_hand is not None,
             leftHandX=left_hand['x'] if left_hand else 0.3,
             leftHandY=left_hand['y'] if left_hand else 0.7,
+            leftPalmCenterX=left_hand['palmCx'] if left_hand else 0.3,
+            leftPalmCenterY=left_hand['palmCy'] if left_hand else 0.7,
+            leftPalmOpenScore=left_hand['palmOpenScore'] if left_hand else 0.0,
             rightHandDetected=right_hand is not None,
             rightHandX=right_hand['x'] if right_hand else 0.7,
             rightHandY=right_hand['y'] if right_hand else 0.7,
+            rightPalmCenterX=right_hand['palmCx'] if right_hand else 0.7,
+            rightPalmCenterY=right_hand['palmCy'] if right_hand else 0.7,
+            rightPalmOpenScore=right_hand['palmOpenScore'] if right_hand else 0.0,
             handDetected=hand_detected,
             openHand=open_hand,
             confidence=confidence,
