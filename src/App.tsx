@@ -4,14 +4,14 @@ import { useVisionTracking } from './hooks/useVisionTracking'
 import CameraVideo from './components/CameraVideo'
 import { ThreeOverlay } from './components/ThreeOverlay'
 import { DebugOverlay } from './components/DebugOverlay'
-import { DEBUG_MODE } from './debug-config'
+import { DEBUG_MODE, DEBUG_VISUALS } from './debug-config'
 
 export default function App() {
   // ── All hooks declared unconditionally at the top, always in the same order ─
 
   const { connection, hand, lastPacketAt } = useHandStream()
 
-  const [debugMode, setDebugMode]         = useState(DEBUG_MODE)
+  const [debugMode, setDebugMode]         = useState(DEBUG_VISUALS)
   const [forceSpawnCount, setForceSpawnCount] = useState(0)
   const [cameraActive, setCameraActive]   = useState(false)
 
