@@ -85,11 +85,19 @@ export function useHandStream() {
       setHand((current) => ({ ...current, connected: false, message }))
     }
 
-    const getSocketUrl = () => {
+    const normalizeWsBase = (base: string) => {
+      if (/^wss?:\/\//i.test(base)) return base
+      if (/^https?:\/\//i.test(base)) return base.replace(/^http/i, 'ws')
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      return `${protocol}//${base.replace(/^\/+/, '')}`
+    }
+
+    const getSocketUrl = () => {
       if (backendWsBase) {
-        return `${backendWsBase.replace(/^ws(s)?:\/\//, protocol + '//')}/ws`
+        const wsBase = normalizeWsBase(backendWsBase)
+        return `${wsBase.replace(/\/$/, '')}/ws`
       }
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
       return `${protocol}//${window.location.host}/ws`
     }
 

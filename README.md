@@ -82,3 +82,31 @@ hand/
 ├── tsconfig.json
 ├── vite.config.ts
 └── README.md
+
+---
+
+## Vercel 배포 가이드
+
+### 1) 프론트엔드 배포
+
+이 레포는 Vite 프론트엔드를 Vercel에 바로 배포할 수 있도록 `vercel.json`이 포함되어 있습니다.
+
+- Build Command: `npm run build`
+- Output Directory: `dist`
+
+### 2) 백엔드 연결 환경변수 설정
+
+프론트엔드는 `/health`, `/ws`로 Python 백엔드와 통신합니다.
+Vercel 프로젝트 환경변수에 아래 값을 설정하세요.
+
+- `VITE_BACKEND_HTTP_URL=https://<your-backend-domain>`
+- `VITE_BACKEND_WS_URL=wss://<your-backend-domain>`
+
+참고: `VITE_BACKEND_WS_URL`은 `wss://`뿐 아니라 `https://` 형식으로 넣어도 프론트에서 WebSocket 주소로 자동 변환됩니다.
+
+### 3) 중요한 아키텍처 참고
+
+현재 `backend/app.py`는 서버의 로컬 카메라(OpenCV/MediaPipe)를 직접 사용하고 WebSocket 서버(`/ws`)를 띄우는 구조입니다.
+따라서 이 Python 백엔드를 그대로 Vercel Functions에서 실행하는 방식은 적합하지 않습니다.
+
+- 권장: 프론트는 Vercel, 비전 백엔드는 별도 서버(예: GPU/CPU VM)로 분리 배포
