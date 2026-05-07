@@ -91,6 +91,8 @@ export function useHandStream() {
     const requireBackend = import.meta.env.VITE_REQUIRE_BACKEND === 'true'
     const enableDemoFallback = import.meta.env.VITE_DEMO_FALLBACK !== 'false'
     const canUseDemoFallback = enableDemoFallback && !requireBackend
+    const hasBackendTarget = Boolean(backendHttpBase || backendWsBase)
+    const useAutoDemoInProd = import.meta.env.PROD && !hasBackendTarget && canUseDemoFallback
 
     const clearRetryTimer = () => {
       if (retryTimer) {
@@ -128,6 +130,8 @@ export function useHandStream() {
       setLastPacketAt(Date.now())
 
       const pointer = { x: 0.5, y: 0.78, spread: 0.08, active: false }
+      const demoStartedAt = performance.now()
+      let lastManualInputAt = demoStartedAt
 
       const updateFromClient = (clientX: number, clientY: number) => {
         const nx = clamp(clientX / window.innerWidth, 0.1, 0.9)
@@ -135,6 +139,7 @@ export function useHandStream() {
         pointer.x = nx
         pointer.y = ny
         pointer.spread = clamp(0.08 + Math.abs(nx - 0.5) * 0.7, 0.08, 0.34)
+        lastManualInputAt = performance.now()
       }
 
       const onPointerDown = (event: PointerEvent) => {
@@ -148,6 +153,7 @@ export function useHandStream() {
 
       const onPointerUp = () => {
         pointer.active = false
+        lastManualInputAt = performance.now()
       }
 
       window.addEventListener('pointerdown', onPointerDown)
@@ -164,17 +170,30 @@ export function useHandStream() {
       const tick = () => {
         if (closed || !demoModeActive) return
 
+        const now = performance.now()
+        const t = (now - demoStartedAt) / 1000
+
         if (!pointer.active) {
-          pointer.x = lerp(pointer.x, 0.5, 0.03)
-          pointer.y = lerp(pointer.y, 0.78, 0.04)
-          pointer.spread = lerp(pointer.spread, 0.08, 0.05)
+          const manualRecently = now - lastManualInputAt < 1400
+          if (manualRecently) {
+            pointer.x = lerp(pointer.x, 0.5, 0.03)
+            pointer.y = lerp(pointer.y, 0.78, 0.04)
+            pointer.spread = lerp(pointer.spread, 0.09, 0.04)
+          } else {
+            const autoX = 0.5 + Math.sin(t * 0.75) * 0.09
+            const autoY = 0.78 + Math.cos(t * 0.85) * 0.03
+            const autoSpread = 0.12 + ((Math.sin(t * 1.9) + 1) / 2) * 0.15
+            pointer.x = lerp(pointer.x, autoX, 0.05)
+            pointer.y = lerp(pointer.y, autoY, 0.05)
+            pointer.spread = lerp(pointer.spread, autoSpread, 0.07)
+          }
         }
 
         const leftX = clamp(pointer.x - pointer.spread, 0.05, 0.95)
         const rightX = clamp(pointer.x + pointer.spread, 0.05, 0.95)
         const handY = clamp(pointer.y, 0.52, 0.92)
         const openScore = clamp(0.42 + (pointer.spread - 0.08) * 2.4, 0.42, 1)
-        const handDetected = pointer.active || pointer.spread > 0.09
+        const handDetected = true
 
         setLastPacketAt(Date.now())
         setHand({
@@ -205,7 +224,7 @@ export function useHandStream() {
           confidence: 0.85,
           x: pointer.x,
           y: handY,
-          message: `demo mode: ${reason}`,
+          message: `demo mode active: ${reason}`,
         })
 
         demoAnimationFrame = window.requestAnimationFrame(tick)
@@ -347,6 +366,8 @@ export function useHandStream() {
 
     if (forceDemoMode) {
       startDemoMode('forced by VITE_DEMO_ONLY=true')
+    } else if (useAutoDemoInProd) {
+      startDemoMode('no backend target configured for production')
     } else {
       pollHealth()
     }
