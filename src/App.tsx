@@ -26,7 +26,7 @@ const INTERACTION_CAPTIONS: Record<string, string> = {
 }
 
 export default function App() {
-  const { connection, hand, lastPacketAt } = useHandStream()
+  const { connection, hand, lastPacketAt, isDemoMode } = useHandStream()
 
   const [debugMode, setDebugMode]             = useState(DEBUG_VISUALS)
   const [forceSpawnP, setForceSpawnP]         = useState(0)
@@ -164,6 +164,9 @@ export default function App() {
             <span className="status-text">
               {connection === 'connecting' ? 'connecting…' : 'backend offline'}
             </span>
+          )}
+          {connection === 'connected' && isDemoMode && (
+            <span className="status-text">demo mode</span>
           )}
         </div>
       )}
