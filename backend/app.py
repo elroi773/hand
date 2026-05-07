@@ -27,13 +27,17 @@ class HandState:
     leftPalmCenterX: float
     leftPalmCenterY: float
     leftPalmOpenScore: float
+    leftWristX: float
+    leftWristY: float
     rightHandDetected: bool
     rightHandX: float
     rightHandY: float
     rightPalmCenterX: float
     rightPalmCenterY: float
     rightPalmOpenScore: float
-    # legacy single-hand fields kept for backward compat
+    rightWristX: float
+    rightWristY: float
+    # legacy single-hand fields
     handDetected: bool
     openHand: bool
     confidence: float
@@ -64,12 +68,16 @@ latest_state = HandState(
     leftPalmCenterX=0.3,
     leftPalmCenterY=0.7,
     leftPalmOpenScore=0.0,
+    leftWristX=0.3,
+    leftWristY=0.7,
     rightHandDetected=False,
     rightHandX=0.7,
     rightHandY=0.7,
     rightPalmCenterX=0.7,
     rightPalmCenterY=0.7,
     rightPalmOpenScore=0.0,
+    rightWristX=0.7,
+    rightWristY=0.7,
     handDetected=False,
     openHand=False,
     confidence=0.0,
@@ -83,36 +91,40 @@ loop_ref: asyncio.AbstractEventLoop | None = None
 stop_event = threading.Event()
 
 
-def _finger_is_extended(landmarks: list[Any], tip: int, pip: int) -> bool:
-    return landmarks[tip].y < landmarks[pip].y
-
-
-def _thumb_is_extended(landmarks: list[Any]) -> bool:
-    return abs(landmarks[4].x - landmarks[2].x) > 0.06
+def _dist_sq(a: Any, b: Any) -> float:
+    return (a.x - b.x) ** 2 + (a.y - b.y) ** 2
 
 
 def _palm_open_score(landmarks: list[Any]) -> float:
-    """Score 0-1: how open and spread the palm is.
-    High score = fingers extended + knuckles spread (book-holding pose)."""
-    ext = [
-        landmarks[8].y  < landmarks[6].y,                # index
-        landmarks[12].y < landmarks[10].y,               # middle
-        landmarks[16].y < landmarks[14].y,               # ring
-        landmarks[20].y < landmarks[18].y,               # pinky
-        abs(landmarks[4].x - landmarks[2].x) > 0.05,    # thumb
-    ]
-    ext_score = sum(1 for e in ext if e) / 5.0
+    """Robust open score: finger tip farther from wrist than pip = extended.
 
-    # How wide the MCP (knuckle) row is spread
+    Works regardless of hand orientation (sideways, downward, etc.).
+    """
+    wrist = landmarks[0]
+
+    # (tip_idx, pip_idx) for index/middle/ring/pinky
+    pairs = [(8, 6), (12, 10), (16, 14), (20, 18)]
+    ext_count = sum(
+        1 for tip_i, pip_i in pairs
+        if _dist_sq(landmarks[tip_i], wrist) > _dist_sq(landmarks[pip_i], wrist)
+    )
+
+    # Thumb: tip farther from index-MCP than thumb-ip
+    if _dist_sq(landmarks[4], landmarks[5]) > _dist_sq(landmarks[3], landmarks[5]):
+        ext_count += 1
+
+    ext_score = ext_count / 5.0
+
+    # MCP knuckle spread
     mcp_xs = [landmarks[5].x, landmarks[9].x, landmarks[13].x, landmarks[17].x]
     mcp_spread = max(mcp_xs) - min(mcp_xs)
-    spread_score = min(1.0, mcp_spread / 0.11)
+    spread_score = min(1.0, mcp_spread / 0.10)
 
-    return round(ext_score * 0.65 + spread_score * 0.35, 3)
+    return round(ext_score * 0.6 + spread_score * 0.4, 3)
 
 
 def _palm_center(landmarks: list[Any]) -> tuple[float, float]:
-    """Stable palm center: average of wrist (0) + 4 MCP knuckle joints (5,9,13,17)."""
+    """Stable palm center: wrist + 4 MCP joints."""
     idx = [0, 5, 9, 13, 17]
     x = round(sum(landmarks[i].x for i in idx) / len(idx), 4)
     y = round(sum(landmarks[i].y for i in idx) / len(idx), 4)
@@ -175,12 +187,14 @@ def _capture_loop() -> None:
     hands_detector = mp.solutions.hands.Hands(
         static_image_mode=False,
         max_num_hands=2,
-        min_detection_confidence=0.6,
-        min_tracking_confidence=0.6,
+        model_complexity=1,
+        min_detection_confidence=0.45,
+        min_tracking_confidence=0.45,
     )
     cap: cv2.VideoCapture | None = None
     active_camera_index: int | None = None
     active_backend = os.environ.get('CAMERA_BACKEND', 'avfoundation').lower()
+    last_log_time: float = 0.0
 
     while not stop_event.is_set():
         if cap is None or not cap.isOpened():
@@ -191,15 +205,14 @@ def _capture_loop() -> None:
                 with state_lock:
                     latest_state = HandState(
                         connected=False,
-                        faceDetected=False,
-                        faceCount=0,
+                        faceDetected=False, faceCount=0,
                         faceCx=0.5, faceCy=0.3, faceForeheadY=0.15,
                         leftHandDetected=False, leftHandX=0.3, leftHandY=0.7,
-                        leftPalmCenterX=0.3, leftPalmCenterY=0.7,
-                        leftPalmOpenScore=0.0,
+                        leftPalmCenterX=0.3, leftPalmCenterY=0.7, leftPalmOpenScore=0.0,
+                        leftWristX=0.3, leftWristY=0.7,
                         rightHandDetected=False, rightHandX=0.7, rightHandY=0.7,
-                        rightPalmCenterX=0.7, rightPalmCenterY=0.7,
-                        rightPalmOpenScore=0.0,
+                        rightPalmCenterX=0.7, rightPalmCenterY=0.7, rightPalmOpenScore=0.0,
+                        rightWristX=0.7, rightWristY=0.7,
                         handDetected=False, openHand=False, confidence=0.0,
                         x=0.5, y=0.6,
                         message=f'camera not available. tried {camera_label} ({active_backend}, idx={selected_index})',
@@ -217,11 +230,11 @@ def _capture_loop() -> None:
                     faceDetected=False, faceCount=0,
                     faceCx=0.5, faceCy=0.3, faceForeheadY=0.15,
                     leftHandDetected=False, leftHandX=0.3, leftHandY=0.7,
-                    leftPalmCenterX=0.3, leftPalmCenterY=0.7,
-                    leftPalmOpenScore=0.0,
+                    leftPalmCenterX=0.3, leftPalmCenterY=0.7, leftPalmOpenScore=0.0,
+                    leftWristX=0.3, leftWristY=0.7,
                     rightHandDetected=False, rightHandX=0.7, rightHandY=0.7,
-                    rightPalmCenterX=0.7, rightPalmCenterY=0.7,
-                    rightPalmOpenScore=0.0,
+                    rightPalmCenterX=0.7, rightPalmCenterY=0.7, rightPalmOpenScore=0.0,
+                    rightWristX=0.7, rightWristY=0.7,
                     handDetected=False, openHand=False, confidence=0.0,
                     x=0.5, y=0.6,
                     message=f'camera ready on index {active_camera_index} using {active_backend}',
@@ -236,11 +249,11 @@ def _capture_loop() -> None:
                     faceDetected=False, faceCount=0,
                     faceCx=0.5, faceCy=0.3, faceForeheadY=0.15,
                     leftHandDetected=False, leftHandX=0.3, leftHandY=0.7,
-                    leftPalmCenterX=0.3, leftPalmCenterY=0.7,
-                    leftPalmOpenScore=0.0,
+                    leftPalmCenterX=0.3, leftPalmCenterY=0.7, leftPalmOpenScore=0.0,
+                    leftWristX=0.3, leftWristY=0.7,
                     rightHandDetected=False, rightHandX=0.7, rightHandY=0.7,
-                    rightPalmCenterX=0.7, rightPalmCenterY=0.7,
-                    rightPalmOpenScore=0.0,
+                    rightPalmCenterX=0.7, rightPalmCenterY=0.7, rightPalmOpenScore=0.0,
+                    rightWristX=0.7, rightWristY=0.7,
                     handDetected=False, openHand=False, confidence=0.0,
                     x=0.5, y=0.6,
                     message='camera frame unavailable. retrying',
@@ -260,7 +273,6 @@ def _capture_loop() -> None:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = face_detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(80, 80))
 
-        # Face coords (normalized)
         face_detected = bool(len(faces))
         face_cx = 0.5
         face_cy = 0.3
@@ -270,10 +282,8 @@ def _capture_loop() -> None:
             fx, fy, fw, fh = faces[0]
             face_cx = (fx + fw * 0.5) / w_px
             face_cy = (fy + fh * 0.5) / h_px
-            # Forehead: top of face rect minus 15% of face height
             face_forehead_y = max(0.0, (fy - fh * 0.15) / h_px)
 
-        # Per-hand tracking — classify by x position (left side = leftHand)
         detected_hands: list[dict[str, Any]] = []
 
         if result.multi_hand_landmarks:
@@ -284,25 +294,20 @@ def _capture_loop() -> None:
                 cx = sum(xs) / len(xs)
                 cy = sum(ys) / len(ys)
 
-                extended = [
-                    _finger_is_extended(landmarks, 8, 6),
-                    _finger_is_extended(landmarks, 12, 10),
-                    _finger_is_extended(landmarks, 16, 14),
-                    _finger_is_extended(landmarks, 20, 18),
-                    _thumb_is_extended(landmarks),
-                ]
-                open_count = sum(1 for e in extended if e)
                 palm_score = _palm_open_score(landmarks)
                 pcx, pcy = _palm_center(landmarks)
+                open_hand = palm_score >= 0.5
                 detected_hands.append({
                     'x': cx, 'y': cy,
+                    'wristX': landmarks[0].x,
+                    'wristY': landmarks[0].y,
                     'palmCx': pcx, 'palmCy': pcy,
-                    'openHand': open_count >= 4,
-                    'confidence': min(1.0, 0.45 + open_count * 0.11),
+                    'openHand': open_hand,
+                    'confidence': min(1.0, 0.55 + palm_score * 0.45),
                     'palmOpenScore': palm_score,
                 })
 
-        # Assign left/right by x position
+        # Screen-x order: smaller x = screen-left, larger x = screen-right
         left_hand: dict[str, Any] | None = None
         right_hand: dict[str, Any] | None = None
 
@@ -313,17 +318,44 @@ def _capture_loop() -> None:
             else:
                 right_hand = h
         elif len(detected_hands) >= 2:
-            sorted_hands = sorted(detected_hands, key=lambda h: h['x'])
+            sorted_hands = sorted(detected_hands, key=lambda hd: hd['x'])
             left_hand = sorted_hands[0]
             right_hand = sorted_hands[-1]
 
-        # Legacy single-hand fields (use whichever hand is more "active")
         primary = left_hand or right_hand
         hand_detected = primary is not None
         open_hand = primary['openHand'] if primary else False
         confidence = primary['confidence'] if primary else 0.0
         hx = primary['x'] if primary else 0.5
         hy = primary['y'] if primary else 0.6
+
+        # ── 1-second diagnostic log ───────────────────────────────────────────
+        now_t = time.monotonic()
+        if now_t - last_log_time >= 1.0:
+            last_log_time = now_t
+            brightness = gray.mean()
+            n_hands = len(detected_hands)
+            print(
+                f'[vision] hands={n_hands} face={face_detected}'
+                f' brightness={brightness:.0f} cam={active_camera_index}',
+                flush=True,
+            )
+            if left_hand:
+                print(
+                    f'[vision] left=({left_hand["x"]:.2f},{left_hand["y"]:.2f})'
+                    f' palmCtr=({left_hand["palmCx"]:.2f},{left_hand["palmCy"]:.2f})'
+                    f' open={left_hand["palmOpenScore"]:.2f}',
+                    flush=True,
+                )
+            if right_hand:
+                print(
+                    f'[vision] right=({right_hand["x"]:.2f},{right_hand["y"]:.2f})'
+                    f' palmCtr=({right_hand["palmCx"]:.2f},{right_hand["palmCy"]:.2f})'
+                    f' open={right_hand["palmOpenScore"]:.2f}',
+                    flush=True,
+                )
+            if n_hands == 0:
+                print('[vision] no hands detected', flush=True)
 
         state = HandState(
             connected=True,
@@ -338,12 +370,16 @@ def _capture_loop() -> None:
             leftPalmCenterX=left_hand['palmCx'] if left_hand else 0.3,
             leftPalmCenterY=left_hand['palmCy'] if left_hand else 0.7,
             leftPalmOpenScore=left_hand['palmOpenScore'] if left_hand else 0.0,
+            leftWristX=left_hand['wristX'] if left_hand else 0.3,
+            leftWristY=left_hand['wristY'] if left_hand else 0.7,
             rightHandDetected=right_hand is not None,
             rightHandX=right_hand['x'] if right_hand else 0.7,
             rightHandY=right_hand['y'] if right_hand else 0.7,
             rightPalmCenterX=right_hand['palmCx'] if right_hand else 0.7,
             rightPalmCenterY=right_hand['palmCy'] if right_hand else 0.7,
             rightPalmOpenScore=right_hand['palmOpenScore'] if right_hand else 0.0,
+            rightWristX=right_hand['wristX'] if right_hand else 0.7,
+            rightWristY=right_hand['wristY'] if right_hand else 0.7,
             handDetected=hand_detected,
             openHand=open_hand,
             confidence=confidence,

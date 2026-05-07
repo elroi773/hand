@@ -15,12 +15,16 @@ export type HandSnapshot = {
   leftPalmCenterX: number
   leftPalmCenterY: number
   leftPalmOpenScore: number
+  leftWristX: number
+  leftWristY: number
   rightHandDetected: boolean
   rightHandX: number
   rightHandY: number
   rightPalmCenterX: number
   rightPalmCenterY: number
   rightPalmOpenScore: number
+  rightWristX: number
+  rightWristY: number
   // legacy
   handDetected: boolean
   openHand: boolean
@@ -43,12 +47,16 @@ const fallbackState: HandSnapshot = {
   leftPalmCenterX: 0.3,
   leftPalmCenterY: 0.7,
   leftPalmOpenScore: 0,
+  leftWristX: 0.3,
+  leftWristY: 0.7,
   rightHandDetected: false,
   rightHandX: 0.7,
   rightHandY: 0.7,
   rightPalmCenterX: 0.7,
   rightPalmCenterY: 0.7,
   rightPalmOpenScore: 0,
+  rightWristX: 0.7,
+  rightWristY: 0.7,
   handDetected: false,
   openHand: false,
   confidence: 0,
@@ -58,7 +66,6 @@ const fallbackState: HandSnapshot = {
 }
 
 export function useHandStream() {
-  // ── All hooks declared unconditionally at the top ──────────────────────────
   const [connection, setConnection] = useState<ConnectionStatus>('connecting')
   const [hand, setHand] = useState<HandSnapshot>(fallbackState)
   const [lastPacketAt, setLastPacketAt] = useState<number | null>(null)
@@ -116,7 +123,6 @@ export function useHandStream() {
       socket.onmessage = (event) => {
         setLastPacketAt(Date.now())
         try {
-          // Safely merge backend payload; fills missing fields with fallback values
           const raw = JSON.parse(event.data as string) as Partial<HandSnapshot>
           setHand({
             connected:          raw.connected          ?? false,
@@ -131,12 +137,16 @@ export function useHandStream() {
             leftPalmCenterX:    raw.leftPalmCenterX    ?? (raw.leftHandX  ?? 0.3),
             leftPalmCenterY:    raw.leftPalmCenterY    ?? (raw.leftHandY  ?? 0.7),
             leftPalmOpenScore:  raw.leftPalmOpenScore  ?? 0,
+            leftWristX:         raw.leftWristX         ?? (raw.leftHandX  ?? 0.3),
+            leftWristY:         raw.leftWristY         ?? (raw.leftHandY  ?? 0.7),
             rightHandDetected:  raw.rightHandDetected  ?? false,
             rightHandX:         raw.rightHandX         ?? 0.7,
             rightHandY:         raw.rightHandY         ?? 0.7,
             rightPalmCenterX:   raw.rightPalmCenterX   ?? (raw.rightHandX ?? 0.7),
             rightPalmCenterY:   raw.rightPalmCenterY   ?? (raw.rightHandY ?? 0.7),
             rightPalmOpenScore: raw.rightPalmOpenScore ?? 0,
+            rightWristX:        raw.rightWristX        ?? (raw.rightHandX ?? 0.7),
+            rightWristY:        raw.rightWristY        ?? (raw.rightHandY ?? 0.7),
             handDetected:       raw.handDetected       ?? false,
             openHand:           raw.openHand           ?? false,
             confidence:         raw.confidence         ?? 0,
@@ -189,7 +199,6 @@ export function useHandStream() {
       socket?.close()
     }
   }, [])
-  // ── End of hooks ──────────────────────────────────────────────────────────
 
   return { connection, hand, lastPacketAt }
 }

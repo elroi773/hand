@@ -18,7 +18,7 @@ const CHARS = [
 ]
 
 const PARTICLE_COLORS = ['#7af0d1', '#ffe87a', '#a0c4ff', '#ffb3de', '#c3f584']
-const MAX_PARTICLES = 200
+const MAX_PARTICLES = 350
 
 // ─── Texture cache ─────────────────────────────────────────────────────────────
 const textureCache = new Map<string, THREE.CanvasTexture>()
@@ -47,22 +47,27 @@ function makeDebugDotTex(color: string, label: string): THREE.CanvasTexture {
   const cv = document.createElement('canvas')
   cv.width = 160; cv.height = 40
   const ctx = cv.getContext('2d')!
-  ctx.beginPath(); ctx.arc(20, 20, 7, 0, Math.PI * 2)
+  ctx.beginPath(); ctx.arc(6, 20, 4, 0, Math.PI * 2)
   ctx.fillStyle = color; ctx.fill()
-  ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.lineWidth = 1; ctx.stroke()
-  ctx.fillStyle = '#ffffff'; ctx.font = 'bold 16px monospace'; ctx.textBaseline = 'middle'
-  ctx.fillText(label, 34, 20)
+  ctx.fillStyle = '#ffffff'; ctx.font = '13px monospace'; ctx.textBaseline = 'middle'
+  ctx.fillText(label, 16, 20)
   return new THREE.CanvasTexture(cv)
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Particle = {
-  sprite: THREE.Sprite; t: number; speed: number
-  sx: number; sy: number; tx: number; ty: number
-  cx: number; cy: number; baseSize: number; phase: number
+  sprite: THREE.Sprite
+  t: number
+  baseSpeed: number
+  // cubic bezier control points
+  sx: number; sy: number
+  c1x: number; c1y: number
+  c2x: number; c2y: number
+  tx: number; ty: number
+  baseSize: number
+  phase: number
 }
 
-/** A point in normalized (0-1) screen space from which to spawn particles. */
 type SpawnPoint = { nx: number; ny: number; source: string }
 
 type Props = {
@@ -70,72 +75,54 @@ type Props = {
   hand: HandSnapshot
   videoRef: React.RefObject<HTMLVideoElement | null>
   debugMode: boolean
-  forceSpawnCount: number
+  forceSpawnP: number
+  forceSpawnSpace: number
+  particleCountRef?: { current: number }
 }
 
-// ─── Position helpers ─────────────────────────────────────────────────────────
-
-/** Brain target: between forehead and face center (inside the skull). */
+// ─── Brain target: derived from face data (inside skull) ──────────────────────
 function brainNorm(h: HandSnapshot): [number, number] {
   if (h.faceDetected) {
-    return [h.faceCx, h.faceForeheadY + (h.faceCy - h.faceForeheadY) * 0.4]
+    // faceForeheadY = (fy - fh*0.15)/h_px, faceCy = (fy + fh/2)/h_px
+    // → faceHeight_norm = (faceCy - faceForeheadY) / 0.65
+    const faceHeight = (h.faceCy - h.faceForeheadY) / 0.65
+    const brainY = h.faceCy - faceHeight * 0.25
+    return [h.faceCx, brainY]
   }
-  return [0.5, 0.25]
+  return [0.5, 0.22]
 }
 
-/**
- * Spawn source points from each detected palm.
- * Uses leftPalmCenterX/Y (wrist+MCP average) with leftHandX/Y as fallback.
- * If no hands are detected, falls back to screen bottom-center.
- */
 function getPalmSpawnPoints(h: HandSnapshot): SpawnPoint[] {
   const pts: SpawnPoint[] = []
-
-  if (h.leftHandDetected) {
-    pts.push({
-      nx: h.leftPalmCenterX,
-      ny: h.leftPalmCenterY,
-      source: 'leftPalm',
-    })
-  }
-
-  if (h.rightHandDetected) {
-    pts.push({
-      nx: h.rightPalmCenterX,
-      ny: h.rightPalmCenterY,
-      source: 'rightPalm',
-    })
-  }
-
-  if (pts.length === 0) {
-    pts.push({ nx: 0.5, ny: 0.82, source: 'screenFallback' })
-  }
-
+  if (h.leftHandDetected)  pts.push({ nx: h.leftPalmCenterX,  ny: h.leftPalmCenterY,  source: 'leftPalm' })
+  if (h.rightHandDetected) pts.push({ nx: h.rightPalmCenterX, ny: h.rightPalmCenterY, source: 'rightPalm' })
+  if (pts.length === 0)    pts.push({ nx: 0.5, ny: 0.82, source: 'screenFallback' })
   return pts
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
-export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnCount }: Props) {
+export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP, forceSpawnSpace, particleCountRef }: Props) {
   const mountRef = useRef<HTMLDivElement>(null)
 
-  const trackingRef            = useRef(tracking)
-  const handRef                = useRef(hand)
-  const debugModeRef           = useRef(debugMode)
-  const forceSpawnRef          = useRef(forceSpawnCount)
-  const lastForceSpawnRef      = useRef(forceSpawnCount)
-  // Tracks gesture-open events so we can fire a burst on each new book-open
-  const lastParticleTriggerRef = useRef(0)
+  const trackingRef          = useRef(tracking)
+  const handRef              = useRef(hand)
+  const debugModeRef         = useRef(debugMode)
+  const forceSpawnPRef       = useRef(forceSpawnP)
+  const forceSpawnSpaceRef   = useRef(forceSpawnSpace)
+  const lastSpawnPRef        = useRef(forceSpawnP)
+  const lastSpawnSpaceRef    = useRef(forceSpawnSpace)
+  const lastTriggerRef       = useRef(0)
 
-  useEffect(() => { trackingRef.current = tracking },          [tracking])
-  useEffect(() => { handRef.current = hand },                  [hand])
-  useEffect(() => { debugModeRef.current = debugMode },        [debugMode])
-  useEffect(() => { forceSpawnRef.current = forceSpawnCount }, [forceSpawnCount])
+  useEffect(() => { trackingRef.current = tracking },           [tracking])
+  useEffect(() => { handRef.current = hand },                   [hand])
+  useEffect(() => { debugModeRef.current = debugMode },         [debugMode])
+  useEffect(() => { forceSpawnPRef.current = forceSpawnP },     [forceSpawnP])
+  useEffect(() => { forceSpawnSpaceRef.current = forceSpawnSpace }, [forceSpawnSpace])
 
   useEffect(() => {
     const mount = mountRef.current
     if (!mount) return
 
-    // ── Renderer ──────────────────────────────────────────────────────────────
     const scene = new THREE.Scene()
     let W = window.innerWidth
     let H = window.innerHeight
@@ -150,13 +137,12 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnCo
     Object.assign(renderer.domElement.style, { position: 'absolute', inset: '0', pointerEvents: 'none' })
     mount.appendChild(renderer.domElement)
 
-    // ── Debug landmark sprites (tiny dots — visible only when debugMode is on) ──
+    // ── Debug dots (tiny labeled points, only when D is on) ───────────────────
     const DEBUG_DOT_DEFS = [
       { label: 'face',   color: '#ff4444' },
       { label: 'brain',  color: '#44ff88' },
       { label: 'L palm', color: '#4499ff' },
       { label: 'R palm', color: '#ffaa00' },
-      { label: 'spawn',  color: '#ffffff' },
     ]
     const debugDots = DEBUG_DOT_DEFS.map(({ label, color }) => {
       const mat = new THREE.SpriteMaterial({
@@ -165,7 +151,7 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnCo
         depthWrite: false, depthTest: false,
       })
       const sp = new THREE.Sprite(mat)
-      sp.scale.set(160, 40, 1)
+      sp.scale.set(120, 30, 1)
       sp.renderOrder = 10
       scene.add(sp)
       return sp
@@ -176,7 +162,7 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnCo
 
     const spawnParticle = (
       sx: number, sy: number, tx: number, ty: number,
-      sizeScale = 1, speedScale = 1,
+      sizeScale = 1, speedScale = 1, absorbStr = 0,
     ) => {
       if (particles.length >= MAX_PARTICLES) return
 
@@ -185,40 +171,54 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnCo
 
       const mat = new THREE.SpriteMaterial({
         map: getCharTexture(char, color),
-        transparent: true, opacity: 1,
+        transparent: true, opacity: 0,
         depthWrite: false, depthTest: false,
         blending: THREE.AdditiveBlending,
       })
       const sprite = new THREE.Sprite(mat)
       sprite.renderOrder = 8
 
-      const baseSize = (32 + Math.random() * 32) * sizeScale
+      const baseSize = (28 + Math.random() * 28) * sizeScale
       sprite.scale.set(baseSize, baseSize, 1)
 
-      const offX = (Math.random() - 0.5) * 140
-      const offY = (Math.random() - 0.5) * 60
+      // Spawn with slight spread from palm center
+      const offX   = (Math.random() - 0.5) * 120
+      const offY   = (Math.random() - 0.5) * 50
       const startX = sx + offX
       const startY = sy + offY
 
-      // Bezier arc sweeping between palm and brain
-      const midX = (startX + tx) / 2 + (Math.random() - 0.5) * 200
-      const midY = (startY + ty) / 2 - 50 + Math.random() * 60
+      // Cubic bezier:
+      // P0 = spawn (palm), P1 = float up above palm,
+      // P2 = curve toward brain, P3 = brain
+      const floatH = 70 + Math.random() * 80  // Three.js units upward
+      const c1x = startX + (Math.random() - 0.5) * 70
+      const c1y = startY + floatH              // positive Y = UP in Three.js
+
+      // P2 biased toward brain based on absorbStrength
+      const gravBias = 0.45 + absorbStr * 0.35
+      const c2x = startX * (1 - gravBias) + tx * gravBias + (Math.random() - 0.5) * 160
+      const c2y = startY * (1 - gravBias) + ty * gravBias + (Math.random() - 0.5) * 40
 
       sprite.position.set(startX, startY, 0)
       scene.add(sprite)
 
+      const baseSpeed = (0.20 + Math.random() * 0.18) * speedScale
       particles.push({
-        sprite, t: 0,
-        speed: (0.22 + Math.random() * 0.22) * speedScale,
-        sx: startX, sy: startY, tx, ty,
-        cx: midX, cy: midY,
-        baseSize,
+        sprite, t: 0, baseSpeed,
+        sx: startX, sy: startY,
+        c1x, c1y, c2x, c2y,
+        tx, ty, baseSize,
         phase: Math.random() * Math.PI * 2,
       })
     }
 
-    const spawnBurst = (cx3: number, cy3: number, tx3: number, ty3: number, count: number) => {
-      for (let i = 0; i < count; i++) spawnParticle(cx3, cy3, tx3, ty3, 2.0, 0.5)
+    const spawnBurst = (
+      cx3: number, cy3: number, tx3: number, ty3: number,
+      count: number, sizeScale = 1.4, speedScale = 0.55, absorbStr = 0,
+    ) => {
+      for (let i = 0; i < count; i++) {
+        spawnParticle(cx3, cy3, tx3, ty3, sizeScale, speedScale, absorbStr)
+      }
     }
 
     // ── Animation loop ────────────────────────────────────────────────────────
@@ -239,71 +239,92 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnCo
       W = window.innerWidth
       H = window.innerHeight
 
-      // Compute shared positions once per frame
       const [bnx, bny] = brainNorm(h)
       const palmPts    = getPalmSpawnPoints(h)
       const [btx, bty] = normToThree(bnx, bny, vW, vH, W, H)
 
-      // ── Debug dots (tiny, only when D key pressed) ────────────────────────
-      const dotDefs: { nx: number; ny: number; show: boolean }[] = [
-        { nx: h.faceCx,          ny: h.faceCy,          show: h.faceDetected },
-        { nx: bnx,               ny: bny,               show: true },
-        { nx: h.leftPalmCenterX, ny: h.leftPalmCenterY, show: h.leftHandDetected },
-        { nx: h.rightPalmCenterX,ny: h.rightPalmCenterY,show: h.rightHandDetected },
-        { nx: palmPts[0].nx,     ny: palmPts[0].ny,     show: true },
+      // Dynamic speed multiplier: only boost during absorbing state
+      const speedMult = tr.gestureState === 'absorbing'
+        ? 1 + tr.absorbStrength * 2
+        : 1
+
+      // ── Debug dots ────────────────────────────────────────────────────────
+      const dotDefs = [
+        { nx: h.faceCx,           ny: h.faceCy,           show: h.faceDetected },
+        { nx: bnx,                ny: bny,                show: true },
+        { nx: h.leftPalmCenterX,  ny: h.leftPalmCenterY,  show: h.leftHandDetected },
+        { nx: h.rightPalmCenterX, ny: h.rightPalmCenterY, show: h.rightHandDetected },
       ]
       debugDots.forEach((sp, i) => {
         const visible = dbg && dotDefs[i].show
-        ;(sp.material as THREE.SpriteMaterial).opacity = visible ? 0.9 : 0
+        ;(sp.material as THREE.SpriteMaterial).opacity = visible ? 0.85 : 0
         if (visible) {
           const [wx, wy] = normToThree(dotDefs[i].nx, dotDefs[i].ny, vW, vH, W, H)
           sp.position.set(wx, wy, 1)
         }
       })
 
-      // ── Gesture burst: fire initial burst when book first opens ───────────
-      if (tr.particleTriggerCount !== lastParticleTriggerRef.current) {
-        lastParticleTriggerRef.current = tr.particleTriggerCount
+      // ── Gesture burst: fire when book first opens ─────────────────────────
+      if (tr.particleTriggerCount !== lastTriggerRef.current) {
+        lastTriggerRef.current = tr.particleTriggerCount
+        const burstPerPalm = Math.round((20 + tr.bookOpenProgress * 50) / Math.max(1, palmPts.length))
+        console.log(
+          `[particles] emitting burst progress=${tr.bookOpenProgress.toFixed(2)}`
+          + ` burstPerPalm=${burstPerPalm} sources=${palmPts.map((p) => p.source).join(',')}`,
+        )
         for (const pt of palmPts) {
           const [cx3, cy3] = normToThree(pt.nx, pt.ny, vW, vH, W, H)
-          console.log(`[gesture] book open! burst from ${pt.source} nx=${pt.nx.toFixed(3)} ny=${pt.ny.toFixed(3)}`)
-          spawnBurst(cx3, cy3, btx, bty, 25)
+          spawnBurst(cx3, cy3, btx, bty, burstPerPalm, 1.4, 0.55, 0)
         }
       }
 
-      // ── Regular spawn — one particle per palm per interval ────────────────
-      if (tr.isBookOpen && tr.handsActive) {
+      // ── Continuous emission while emitting/absorbing/cooldown ────────────
+      const shouldEmit = tr.isBookOpen && tr.handsActive
+      if (shouldEmit) {
         spawnAccum += dt
-        const interval = dbg ? 0.05 : 0.08
-        while (spawnAccum >= interval) {
+        const emissionRate = tr.emissionRate
+        const interval     = 1 / Math.max(1, emissionRate)
+        while (spawnAccum >= interval && particles.length < MAX_PARTICLES) {
           spawnAccum -= interval
           for (const pt of palmPts) {
             const [sx, sy] = normToThree(pt.nx, pt.ny, vW, vH, W, H)
-            spawnParticle(sx, sy, btx, bty, dbg ? 2.0 : 1.0, dbg ? 0.5 : 1.0)
+            spawnParticle(sx, sy, btx, bty, 1.0, 1.0, tr.absorbStrength)
           }
         }
       } else {
         spawnAccum = 0
       }
 
-      // ── Force spawn (P / Space key) ───────────────────────────────────────
-      if (forceSpawnRef.current !== lastForceSpawnRef.current) {
-        lastForceSpawnRef.current = forceSpawnRef.current
+      // ── Force spawn: P key (medium burst, 0.5 absorbStr) ─────────────────
+      if (forceSpawnPRef.current !== lastSpawnPRef.current) {
+        lastSpawnPRef.current = forceSpawnPRef.current
+        const sources = palmPts.map((p) => p.source).join(', ')
+        console.log(`[particles] P pressed — sources: ${sources}`)
         for (const pt of palmPts) {
           const [cx3, cy3] = normToThree(pt.nx, pt.ny, vW, vH, W, H)
-          console.log(
-            `[particles] forced spawn source=${pt.source}` +
-            ` nx=${pt.nx.toFixed(3)} ny=${pt.ny.toFixed(3)}` +
-            ` particles=${particles.length}`,
-          )
-          spawnBurst(cx3, cy3, btx, bty, 40)
+          console.log(`[particles] spawn source=${pt.source} nx=${pt.nx.toFixed(3)} ny=${pt.ny.toFixed(3)} count=18`)
+          spawnBurst(cx3, cy3, btx, bty, 18, 1.4, 0.7, 0.5)
         }
+        console.log(`[particles] total after P: ${particles.length}`)
+      }
+
+      // ── Force spawn: Space key (large burst, full simulation) ────────────
+      if (forceSpawnSpaceRef.current !== lastSpawnSpaceRef.current) {
+        lastSpawnSpaceRef.current = forceSpawnSpaceRef.current
+        const sources = palmPts.map((p) => p.source).join(', ')
+        console.log(`[particles] Space pressed — sources: ${sources}`)
+        for (const pt of palmPts) {
+          const [cx3, cy3] = normToThree(pt.nx, pt.ny, vW, vH, W, H)
+          console.log(`[particles] spawn source=${pt.source} nx=${pt.nx.toFixed(3)} ny=${pt.ny.toFixed(3)} count=50`)
+          spawnBurst(cx3, cy3, btx, bty, 50, 1.6, 0.5, 0.7)
+        }
+        console.log(`[particles] total after Space: ${particles.length}`)
       }
 
       // ── Update particles ──────────────────────────────────────────────────
       for (let i = particles.length - 1; i >= 0; i--) {
         const p = particles[i]
-        p.t += p.speed * dt
+        p.t += p.baseSpeed * dt * speedMult
 
         if (p.t >= 1.0) {
           scene.remove(p.sprite)
@@ -312,20 +333,46 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnCo
           continue
         }
 
-        const t = p.t; const mt = 1 - t
-        let x = mt * mt * p.sx + 2 * mt * t * p.cx + t * t * p.tx
-        let y = mt * mt * p.sy + 2 * mt * t * p.cy + t * t * p.ty
+        const t  = p.t
+        const mt = 1 - t
 
-        const swirl = Math.sin(elapsed * 3.5 + p.phase) * 22 * (1 - t)
+        // Cubic bezier position
+        let x = mt*mt*mt*p.sx + 3*mt*mt*t*p.c1x + 3*mt*t*t*p.c2x + t*t*t*p.tx
+        let y = mt*mt*mt*p.sy + 3*mt*mt*t*p.c1y + 3*mt*t*t*p.c2y + t*t*t*p.ty
+
+        // Organic swirl (fades out near brain to keep absorption clean)
+        const swirlAmt = Math.sin(elapsed * 3.5 + p.phase) * 20 * (1 - t * t)
         const dx = p.tx - p.sx; const dy = p.ty - p.sy
         const len = Math.sqrt(dx * dx + dy * dy) || 1
-        x += (-dy / len) * swirl
-        y += (dx / len) * swirl
+        x += (-dy / len) * swirlAmt
+        y += (dx  / len) * swirlAmt
 
         p.sprite.position.set(x, y, 0)
-        p.sprite.scale.setScalar(p.baseSize * Math.max(0.04, 1 - t * t * t))
-        p.sprite.material.opacity = t < 0.55 ? 1.0 : Math.max(0, 1 - (t - 0.55) / 0.45)
+
+        // Size: grow briefly, hold, then shrink as absorbed
+        let sizeFactor: number
+        if (t < 0.12) {
+          sizeFactor = 0.4 + t / 0.12 * 0.6
+        } else if (t < 0.65) {
+          sizeFactor = 1.0
+        } else {
+          sizeFactor = Math.max(0.04, 1.0 - (t - 0.65) / 0.35 * 0.96)
+        }
+        p.sprite.scale.setScalar(p.baseSize * sizeFactor)
+
+        // Opacity: fade in, hold, fade out near brain
+        let opacity: number
+        if (t < 0.12) {
+          opacity = t / 0.12
+        } else if (t < 0.68) {
+          opacity = 1.0
+        } else {
+          opacity = Math.max(0, 1.0 - (t - 0.68) / 0.32)
+        }
+        p.sprite.material.opacity = opacity
       }
+
+      if (particleCountRef) particleCountRef.current = particles.length
 
       renderer.render(scene, camera)
     }
