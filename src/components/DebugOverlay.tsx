@@ -13,6 +13,7 @@ type Props = {
   videoRef: RefObject<HTMLVideoElement | null>
   debugMode: boolean
   particleCountRef?: { current: number }
+  absorbedCount?: number
 }
 
 function ms(ts: number | null): string {
@@ -40,7 +41,7 @@ type DotDef = {
   show: boolean
 }
 
-export function DebugOverlay({ hand, tracking, connection, lastPacketAt, cameraActive, videoRef, debugMode, particleCountRef }: Props) {
+export function DebugOverlay({ hand, tracking, connection, lastPacketAt, cameraActive, videoRef, debugMode, particleCountRef, absorbedCount = 0 }: Props) {
   if (!debugMode) return null
 
   const vid = videoRef.current
@@ -152,6 +153,51 @@ export function DebugOverlay({ hand, tracking, connection, lastPacketAt, cameraA
           <span>  particles: <b style={{ color: particleCount > 280 ? '#ff5555' : '#aaa' }}>{particleCount}</b></span>
         </div>
         <div className="dbg-row dbg-muted">triggers: {tracking.particleTriggerCount}</div>
+        <div className="dbg-row">
+          <span>absorbed: <b style={{ color: '#7af0d1' }}>{absorbedCount}</b></span>
+        </div>
+
+        <div className="dbg-divider" />
+
+        {/* ── Interaction state ──────────────────────────────────── */}
+        {(() => {
+          const iColor =
+            tracking.currentInteraction === 'absorbing'   ? '#ff88ff'
+            : tracking.currentInteraction === 'scattering'  ? '#ff6666'
+            : tracking.currentInteraction === 'nearBrain'   ? '#44ff88'
+            : tracking.currentInteraction === 'compressing' ? '#a888ff'
+            : tracking.currentInteraction === 'hovering'    ? '#7af0d1'
+            : '#888'
+          return (
+            <>
+              <div className="dbg-row">
+                <span>interact: <b style={{ color: iColor }}>{tracking.currentInteraction}</b></span>
+              </div>
+              <div className="dbg-row">
+                <span>palmVX: <b>{val(tracking.palmVelocityX)}</b></span>
+                <span>  shake: </span>
+                <div className="dbg-bar">
+                  <div className="dbg-bar-fill" style={{ width: pct(tracking.shakeStrength), background: '#ff8888' }} />
+                </div>
+              </div>
+              <div className="dbg-row">
+                <span>compress: </span>
+                <div className="dbg-bar">
+                  <div className="dbg-bar-fill" style={{ width: pct(tracking.compressionStrength), background: '#a888ff' }} />
+                </div>
+                <span> <b>{pct(tracking.compressionStrength)}</b></span>
+              </div>
+              <div className="dbg-row" style={{ fontSize: '10px' }}>
+                <span>brainDist: <b>{val(tracking.handToBrainDistance)}</b></span>
+                <span>  prox: <b style={{ color: tracking.proximityToBrain > 0.65 ? '#44ff88' : '#aaa' }}>{pct(tracking.proximityToBrain)}</b></span>
+              </div>
+              <div className="dbg-row" style={{ fontSize: '10px' }}>
+                <span>still: <b style={{ color: tracking.isHandStill ? '#7af0d1' : '#888' }}>{tracking.isHandStill ? '✓' : '✗'}</b></span>
+                <span>  avgOpen: <b>{pct(tracking.avgPalmOpenScore)}</b></span>
+              </div>
+            </>
+          )
+        })()}
 
         <div className="dbg-divider" />
 
