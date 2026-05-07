@@ -209,3 +209,238 @@ body,
   pointer-events: none;
   z-index: 10;
 }
+
+/* ── Interaction caption ─────────────────────────────────────────────────── */
+.interaction-caption {
+  position: absolute;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif;
+  font-size: 1.08rem;
+  font-weight: 300;
+  color: rgba(255, 255, 255, 0.82);
+  letter-spacing: 0.04em;
+  text-align: center;
+  pointer-events: none;
+  z-index: 10;
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.9);
+  animation: caption-fade 0.4s ease;
+}
+
+@keyframes caption-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ── Milestone caption ───────────────────────────────────────────────────── */
+.milestone-caption {
+  position: absolute;
+  top: 38%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif;
+  font-size: 1.35rem;
+  font-weight: 500;
+  color: rgba(122, 240, 209, 0.95);
+  letter-spacing: 0.05em;
+  text-align: center;
+  pointer-events: none;
+  z-index: 15;
+  text-shadow: 0 0 28px rgba(122, 240, 209, 0.65), 0 2px 14px rgba(0, 0, 0, 0.9);
+  animation: milestone-show 3s ease forwards;
+}
+
+@keyframes milestone-show {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.88); }
+  12%  { opacity: 1; transform: translate(-50%, -50%) scale(1.0);  }
+  70%  { opacity: 1; transform: translate(-50%, -50%) scale(1.0);  }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.04); }
+}
+
+/* ── Guide backdrop ──────────────────────────────────────────────────────── */
+.guide-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 16px;
+  backdrop-filter: blur(4px);
+}
+
+/* ── Guide modal ─────────────────────────────────────────────────────────── */
+.guide-modal {
+  background: rgba(6, 12, 18, 0.9);
+  border: 1px solid rgba(122, 240, 209, 0.2);
+  border-radius: 20px;
+  padding: 28px 28px 22px;
+  max-width: 420px;
+  width: 100%;
+  max-height: 85vh;
+  overflow-y: auto;
+  color: rgba(255, 255, 255, 0.88);
+  font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif;
+  backdrop-filter: blur(14px);
+  box-shadow: 0 12px 60px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(122, 240, 209, 0.07);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(122, 240, 209, 0.2) transparent;
+}
+
+.guide-title {
+  font-size: 1.4rem;
+  font-weight: 600;
+  color: rgba(122, 240, 209, 0.95);
+  margin: 0 0 14px;
+  text-align: center;
+  letter-spacing: 0.04em;
+}
+
+.guide-program-description {
+  font-size: 0.87rem;
+  color: rgba(255, 255, 255, 0.72);
+  line-height: 1.65;
+  margin: 0 0 10px;
+}
+
+.guide-usage-description {
+  font-size: 0.84rem;
+  color: rgba(255, 255, 255, 0.55);
+  line-height: 1.65;
+  margin: 0 0 16px;
+}
+
+.guide-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  counter-reset: guide-step;
+}
+
+.guide-list li {
+  counter-increment: guide-step;
+  display: grid;
+  grid-template-columns: 1.4em 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 8px;
+  padding: 8px 10px;
+  background: rgba(122, 240, 209, 0.05);
+  border-left: 2px solid rgba(122, 240, 209, 0.28);
+  border-radius: 0 6px 6px 0;
+  font-size: 0.83rem;
+}
+
+.guide-list li::before {
+  content: counter(guide-step);
+  grid-row: 1;
+  color: rgba(122, 240, 209, 0.6);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.guide-list li b {
+  grid-column: 2;
+  grid-row: 1;
+  color: rgba(255, 255, 255, 0.88);
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.guide-list li span {
+  grid-column: 2;
+  grid-row: 2;
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.guide-tip {
+  font-size: 0.79rem;
+  color: rgba(255, 232, 122, 0.7);
+  margin: 0 0 20px;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.guide-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.guide-primary-button {
+  background: rgba(122, 240, 209, 0.12);
+  border: 1px solid rgba(122, 240, 209, 0.4);
+  color: rgba(122, 240, 209, 0.95);
+  padding: 11px 24px;
+  border-radius: 10px;
+  font-size: 0.93rem;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  letter-spacing: 0.04em;
+  transition: background 0.18s, border-color 0.18s;
+  width: 100%;
+}
+
+.guide-primary-button:hover,
+.guide-primary-button:focus-visible {
+  background: rgba(122, 240, 209, 0.22);
+  border-color: rgba(122, 240, 209, 0.65);
+  outline: none;
+}
+
+.guide-secondary-button {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 0.78rem;
+  cursor: pointer;
+  text-align: center;
+  padding: 6px;
+  font-family: inherit;
+  transition: color 0.18s;
+  width: 100%;
+}
+
+.guide-secondary-button:hover,
+.guide-secondary-button:focus-visible {
+  color: rgba(255, 255, 255, 0.58);
+  outline: none;
+}
+
+/* ── Help button (bottom-right) ──────────────────────────────────────────── */
+.guide-help-button {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(6, 12, 18, 0.72);
+  border: 1px solid rgba(122, 240, 209, 0.25);
+  color: rgba(122, 240, 209, 0.8);
+  font-size: 1.1rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 30;
+  backdrop-filter: blur(6px);
+  transition: background 0.18s, border-color 0.18s;
+  font-family: 'Helvetica Neue', Helvetica, sans-serif;
+}
+
+.guide-help-button:hover,
+.guide-help-button:focus-visible {
+  background: rgba(122, 240, 209, 0.12);
+  border-color: rgba(122, 240, 209, 0.5);
+  outline: none;
+}
