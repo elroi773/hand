@@ -55,7 +55,7 @@ function makeDebugDotTex(color: string, label: string): THREE.CanvasTexture {
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-type Particle = {
+type KnowledgeParticle = {
   sprite: THREE.Sprite
   t: number
   baseSpeed: number
@@ -66,6 +66,12 @@ type Particle = {
   tx: number; ty: number
   baseSize: number
   phase: number
+  // interaction state
+  hoverAge: number      // seconds frozen in hover
+  scatterVX: number     // per-particle scatter velocity (set on first scatter frame)
+  scatterVY: number
+  palmCx3: number       // latest avg palm center in three.js space (compression target)
+  palmCy3: number
 }
 
 type SpawnPoint = { nx: number; ny: number; source: string }
@@ -78,13 +84,12 @@ type Props = {
   forceSpawnP: number
   forceSpawnSpace: number
   particleCountRef?: { current: number }
+  onAbsorb?: (count: number) => void
 }
 
 // ─── Brain target: derived from face data (inside skull) ──────────────────────
 function brainNorm(h: HandSnapshot): [number, number] {
   if (h.faceDetected) {
-    // faceForeheadY = (fy - fh*0.15)/h_px, faceCy = (fy + fh/2)/h_px
-    // → faceHeight_norm = (faceCy - faceForeheadY) / 0.65
     const faceHeight = (h.faceCy - h.faceForeheadY) / 0.65
     const brainY = h.faceCy - faceHeight * 0.25
     return [h.faceCx, brainY]
@@ -101,7 +106,7 @@ function getPalmSpawnPoints(h: HandSnapshot): SpawnPoint[] {
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
-export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP, forceSpawnSpace, particleCountRef }: Props) {
+export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP, forceSpawnSpace, particleCountRef, onAbsorb }: Props) {
   const mountRef = useRef<HTMLDivElement>(null)
 
   const trackingRef          = useRef(tracking)
@@ -112,12 +117,14 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP,
   const lastSpawnPRef        = useRef(forceSpawnP)
   const lastSpawnSpaceRef    = useRef(forceSpawnSpace)
   const lastTriggerRef       = useRef(0)
+  const onAbsorbRef          = useRef(onAbsorb)
 
-  useEffect(() => { trackingRef.current = tracking },           [tracking])
-  useEffect(() => { handRef.current = hand },                   [hand])
-  useEffect(() => { debugModeRef.current = debugMode },         [debugMode])
-  useEffect(() => { forceSpawnPRef.current = forceSpawnP },     [forceSpawnP])
-  useEffect(() => { forceSpawnSpaceRef.current = forceSpawnSpace }, [forceSpawnSpace])
+  useEffect(() => { trackingRef.current = tracking },               [tracking])
+  useEffect(() => { handRef.current = hand },                       [hand])
+  useEffect(() => { debugModeRef.current = debugMode },             [debugMode])
+  useEffect(() => { forceSpawnPRef.current = forceSpawnP },         [forceSpawnP])
+  useEffect(() => { forceSpawnSpaceRef.current = forceSpawnSpace },  [forceSpawnSpace])
+  useEffect(() => { onAbsorbRef.current = onAbsorb },               [onAbsorb])
 
   useEffect(() => {
     const mount = mountRef.current
@@ -137,7 +144,7 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP,
     Object.assign(renderer.domElement.style, { position: 'absolute', inset: '0', pointerEvents: 'none' })
     mount.appendChild(renderer.domElement)
 
-    // ── Debug dots (tiny labeled points, only when D is on) ───────────────────
+    // ── Debug dots ────────────────────────────────────────────────────────────
     const DEBUG_DOT_DEFS = [
       { label: 'face',   color: '#ff4444' },
       { label: 'brain',  color: '#44ff88' },
@@ -158,7 +165,7 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP,
     })
 
     // ── Particle pool ─────────────────────────────────────────────────────────
-    const particles: Particle[] = []
+    const particles: KnowledgeParticle[] = []
 
     const spawnParticle = (
       sx: number, sy: number, tx: number, ty: number,
@@ -181,20 +188,15 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP,
       const baseSize = (28 + Math.random() * 28) * sizeScale
       sprite.scale.set(baseSize, baseSize, 1)
 
-      // Spawn with slight spread from palm center
       const offX   = (Math.random() - 0.5) * 120
       const offY   = (Math.random() - 0.5) * 50
       const startX = sx + offX
       const startY = sy + offY
 
-      // Cubic bezier:
-      // P0 = spawn (palm), P1 = float up above palm,
-      // P2 = curve toward brain, P3 = brain
-      const floatH = 70 + Math.random() * 80  // Three.js units upward
+      const floatH = 70 + Math.random() * 80
       const c1x = startX + (Math.random() - 0.5) * 70
-      const c1y = startY + floatH              // positive Y = UP in Three.js
+      const c1y = startY + floatH
 
-      // P2 biased toward brain based on absorbStrength
       const gravBias = 0.45 + absorbStr * 0.35
       const c2x = startX * (1 - gravBias) + tx * gravBias + (Math.random() - 0.5) * 160
       const c2y = startY * (1 - gravBias) + ty * gravBias + (Math.random() - 0.5) * 40
@@ -209,6 +211,9 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP,
         c1x, c1y, c2x, c2y,
         tx, ty, baseSize,
         phase: Math.random() * Math.PI * 2,
+        hoverAge: 0,
+        scatterVX: 0, scatterVY: 0,
+        palmCx3: sx, palmCy3: sy,
       })
     }
 
@@ -243,7 +248,21 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP,
       const palmPts    = getPalmSpawnPoints(h)
       const [btx, bty] = normToThree(bnx, bny, vW, vH, W, H)
 
-      // Dynamic speed multiplier: only boost during absorbing state
+      // ── Avg palm center in Three.js space (for compression target) ────────
+      let avgPalmX3 = 0, avgPalmY3 = 0, palmCount = 0
+      if (h.leftHandDetected) {
+        const [lx, ly] = normToThree(h.leftPalmCenterX, h.leftPalmCenterY, vW, vH, W, H)
+        avgPalmX3 += lx; avgPalmY3 += ly; palmCount++
+      }
+      if (h.rightHandDetected) {
+        const [rx, ry] = normToThree(h.rightPalmCenterX, h.rightPalmCenterY, vW, vH, W, H)
+        avgPalmX3 += rx; avgPalmY3 += ry; palmCount++
+      }
+      if (palmCount > 0) { avgPalmX3 /= palmCount; avgPalmY3 /= palmCount }
+
+      const interaction = tr.currentInteraction
+
+      // Base speed multiplier (absorbing lifts all particles)
       const speedMult = tr.gestureState === 'absorbing'
         ? 1 + tr.absorbStrength * 2
         : 1
@@ -282,8 +301,7 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP,
       const shouldEmit = tr.isBookOpen && tr.handsActive
       if (shouldEmit) {
         spawnAccum += dt
-        const emissionRate = tr.emissionRate
-        const interval     = 1 / Math.max(1, emissionRate)
+        const interval = 1 / Math.max(1, tr.emissionRate)
         while (spawnAccum >= interval && particles.length < MAX_PARTICLES) {
           spawnAccum -= interval
           for (const pt of palmPts) {
@@ -295,7 +313,7 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP,
         spawnAccum = 0
       }
 
-      // ── Force spawn: P key (medium burst, 0.5 absorbStr) ─────────────────
+      // ── Force spawn: P key ────────────────────────────────────────────────
       if (forceSpawnPRef.current !== lastSpawnPRef.current) {
         lastSpawnPRef.current = forceSpawnPRef.current
         const sources = palmPts.map((p) => p.source).join(', ')
@@ -308,7 +326,7 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP,
         console.log(`[particles] total after P: ${particles.length}`)
       }
 
-      // ── Force spawn: Space key (large burst, full simulation) ────────────
+      // ── Force spawn: Space key ────────────────────────────────────────────
       if (forceSpawnSpaceRef.current !== lastSpawnSpaceRef.current) {
         lastSpawnSpaceRef.current = forceSpawnSpaceRef.current
         const sources = palmPts.map((p) => p.source).join(', ')
@@ -322,34 +340,88 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP,
       }
 
       // ── Update particles ──────────────────────────────────────────────────
+      let absorbedThisFrame = 0
+
       for (let i = particles.length - 1; i >= 0; i--) {
         const p = particles[i]
-        p.t += p.baseSpeed * dt * speedMult
+        p.palmCx3 = avgPalmX3
+        p.palmCy3 = avgPalmY3
+
+        if (interaction === 'scattering') {
+          // Assign random scatter velocity on first scatter frame
+          if (p.scatterVX === 0 && p.scatterVY === 0) {
+            const angle = Math.random() * Math.PI * 2
+            const spd   = 150 + Math.random() * 200
+            p.scatterVX = Math.cos(angle) * spd
+            p.scatterVY = Math.sin(angle) * spd * 0.7
+          }
+          p.sprite.position.x += p.scatterVX * dt
+          p.sprite.position.y += p.scatterVY * dt
+          // Exponential velocity decay (reach ~10% in 1 s)
+          const decay = Math.pow(0.1, dt)
+          p.scatterVX *= decay
+          p.scatterVY *= decay
+          p.hoverAge = 0
+          p.t += p.baseSpeed * dt * 3   // advance faster so scattered particles die quickly
+
+        } else if (interaction === 'hovering' && p.t > 0.08 && p.t < 0.85) {
+          // Freeze t, gently oscillate around bezier position
+          p.scatterVX = 0; p.scatterVY = 0
+          p.hoverAge += dt
+          const t = p.t; const mt = 1 - t
+          let bx = mt*mt*mt*p.sx + 3*mt*mt*t*p.c1x + 3*mt*t*t*p.c2x + t*t*t*p.tx
+          let by = mt*mt*mt*p.sy + 3*mt*mt*t*p.c1y + 3*mt*t*t*p.c2y + t*t*t*p.ty
+          bx += Math.sin(elapsed * 2.2 + p.phase)       * 18
+          by += Math.cos(elapsed * 1.6 + p.phase * 1.4) * 12
+          p.sprite.position.set(bx, by, 0)
+          // t does not advance during hover
+
+        } else {
+          p.scatterVX = 0; p.scatterVY = 0
+          p.hoverAge  = 0
+
+          let effectiveSpeed = p.baseSpeed * speedMult
+          if (interaction === 'nearBrain') {
+            effectiveSpeed *= 1 + tr.proximityToBrain * 3
+          }
+
+          p.t += effectiveSpeed * dt
+
+          if (interaction === 'compressing') {
+            // Attract toward avg palm center while slowly advancing
+            const px = p.sprite.position.x
+            const py = p.sprite.position.y
+            const cdx  = p.palmCx3 - px
+            const cdy  = p.palmCy3 - py
+            const cdist = Math.sqrt(cdx * cdx + cdy * cdy) || 1
+            const force = tr.compressionStrength * 160 * dt
+            p.sprite.position.x += (cdx / cdist) * force
+            p.sprite.position.y += (cdy / cdist) * force
+          } else {
+            // Normal cubic bezier path
+            const t = p.t; const mt = 1 - t
+            let x = mt*mt*mt*p.sx + 3*mt*mt*t*p.c1x + 3*mt*t*t*p.c2x + t*t*t*p.tx
+            let y = mt*mt*mt*p.sy + 3*mt*mt*t*p.c1y + 3*mt*t*t*p.c2y + t*t*t*p.ty
+            // Organic swirl (fades out near brain)
+            const swirlAmt = Math.sin(elapsed * 3.5 + p.phase) * 20 * (1 - t * t)
+            const sdx = p.tx - p.sx; const sdy = p.ty - p.sy
+            const slen = Math.sqrt(sdx * sdx + sdy * sdy) || 1
+            x += (-sdy / slen) * swirlAmt
+            y += ( sdx / slen) * swirlAmt
+            p.sprite.position.set(x, y, 0)
+          }
+        }
 
         if (p.t >= 1.0) {
+          absorbedThisFrame++
           scene.remove(p.sprite)
           p.sprite.material.dispose()
           particles.splice(i, 1)
           continue
         }
 
-        const t  = p.t
-        const mt = 1 - t
-
-        // Cubic bezier position
-        let x = mt*mt*mt*p.sx + 3*mt*mt*t*p.c1x + 3*mt*t*t*p.c2x + t*t*t*p.tx
-        let y = mt*mt*mt*p.sy + 3*mt*mt*t*p.c1y + 3*mt*t*t*p.c2y + t*t*t*p.ty
-
-        // Organic swirl (fades out near brain to keep absorption clean)
-        const swirlAmt = Math.sin(elapsed * 3.5 + p.phase) * 20 * (1 - t * t)
-        const dx = p.tx - p.sx; const dy = p.ty - p.sy
-        const len = Math.sqrt(dx * dx + dy * dy) || 1
-        x += (-dy / len) * swirlAmt
-        y += (dx  / len) * swirlAmt
-
-        p.sprite.position.set(x, y, 0)
-
-        // Size: grow briefly, hold, then shrink as absorbed
+        // ── Size ────────────────────────────────────────────────────────────
+        const t = p.t
         let sizeFactor: number
         if (t < 0.12) {
           sizeFactor = 0.4 + t / 0.12 * 0.6
@@ -358,9 +430,12 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP,
         } else {
           sizeFactor = Math.max(0.04, 1.0 - (t - 0.65) / 0.35 * 0.96)
         }
+        if (interaction === 'hovering' && p.hoverAge > 0) {
+          sizeFactor *= 0.9 + Math.sin(elapsed * 3 + p.phase) * 0.1
+        }
         p.sprite.scale.setScalar(p.baseSize * sizeFactor)
 
-        // Opacity: fade in, hold, fade out near brain
+        // ── Opacity ─────────────────────────────────────────────────────────
         let opacity: number
         if (t < 0.12) {
           opacity = t / 0.12
@@ -369,7 +444,14 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP,
         } else {
           opacity = Math.max(0, 1.0 - (t - 0.68) / 0.32)
         }
+        if (interaction === 'scattering') {
+          opacity *= Math.max(0, 1 - t * 1.5)
+        }
         p.sprite.material.opacity = opacity
+      }
+
+      if (absorbedThisFrame > 0 && onAbsorbRef.current) {
+        onAbsorbRef.current(absorbedThisFrame)
       }
 
       if (particleCountRef) particleCountRef.current = particles.length
