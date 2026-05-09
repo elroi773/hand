@@ -15,6 +15,8 @@ const MILESTONES: Array<[number, string]> = [
   [200, '경계가 허물어집니다…'],
   [500, '지식이 넘쳐흐릅니다'],
 ]
+
+
 const MILESTONE_MSGS = Object.fromEntries(MILESTONES)
 
 const INTERACTION_CAPTIONS: Record<string, string> = {
