@@ -132,6 +132,58 @@ const defaultState: TrackingState = {
   currentInteraction: 'idle',
 }
 
+type HandMetrics = {
+  dist: number
+  avgY: number
+  yDiff: number
+  avgPalmOpenScore: number
+  compressionStrength: number
+}
+
+const getBrainTarget = (hand: HandSnapshot) => {
+  if (!hand.faceDetected) {
+    return { x: 0.5, y: 0.22 }
+  }
+
+  return {
+    x: hand.faceCx,
+    y: hand.faceCy - (hand.faceCy - hand.faceForeheadY) / 0.65 * 0.25,
+  }
+}
+
+const getHandMetrics = (hand: HandSnapshot): HandMetrics => {
+  const avgPalmOpenScore = (hand.leftPalmOpenScore + hand.rightPalmOpenScore) / 2
+
+  return {
+    dist: Math.abs(hand.rightHandX - hand.leftHandX),
+    avgY: (hand.leftHandY + hand.rightHandY) / 2,
+    yDiff: Math.abs(hand.leftHandY - hand.rightHandY),
+    avgPalmOpenScore,
+    compressionStrength: clamp(1 - avgPalmOpenScore, 0, 1),
+  }
+}
+
+const getCurrentInteraction = ({
+  gestureState,
+  shakeStrength,
+  proximityToBrain,
+  compressionStrength,
+  isHandStill,
+}: {
+  gestureState: GestureState
+  shakeStrength: number
+  proximityToBrain: number
+  compressionStrength: number
+  isHandStill: boolean
+}): CurrentInteraction => {
+  if (gestureState === 'absorbing') return 'absorbing'
+  if (shakeStrength > SHAKE_TRIGGER) return 'scattering'
+  if (proximityToBrain > NEAR_BRAIN_TRIGGER) return 'nearBrain'
+  if (compressionStrength > COMPRESS_TRIGGER) return 'compressing'
+  if (isHandStill && gestureState !== 'idle') return 'hovering'
+  return 'idle'
+}
+
 export function useVisionTracking(
   hand: HandSnapshot,
   relaxed = false,
@@ -192,10 +244,9 @@ export function useVisionTracking(
     const shakeStrength = clamp(shakeSmoothedRef.current / SHAKE_SENSITIVITY, 0, 1)
 
     // ── Avg palm open score & compression ────────────────────────────────────
-    const avgPalmOpenScore    = both
-      ? (hand.leftPalmOpenScore + hand.rightPalmOpenScore) / 2
-      : 0
-    const compressionStrength = both ? clamp(1 - avgPalmOpenScore, 0, 1) : 0
+    const metrics = both ? getHandMetrics(hand) : null
+    const avgPalmOpenScore = metrics?.avgPalmOpenScore ?? 0
+    const compressionStrength = metrics?.compressionStrength ?? 0
 
     // ── Hand stillness ────────────────────────────────────────────────────────
     const isHandStill = both
@@ -203,16 +254,13 @@ export function useVisionTracking(
       && Math.abs(palmMoveUp) < STILL_LIFT_MAX
 
     // ── Brain proximity ───────────────────────────────────────────────────────
-    const brainNx = hand.faceDetected ? hand.faceCx : 0.5
-    const brainNy = hand.faceDetected
-      ? hand.faceCy - (hand.faceCy - hand.faceForeheadY) / 0.65 * 0.25
-      : 0.22
+    const brain = getBrainTarget(hand)
     let handToBrainDistance = 1.0
     if (both) {
       const midX = (hand.leftPalmCenterX + hand.rightPalmCenterX) / 2
       const midY = (hand.leftPalmCenterY + hand.rightPalmCenterY) / 2
       handToBrainDistance = Math.sqrt(
-        (midX - brainNx) ** 2 + (midY - brainNy) ** 2,
+        (midX - brain.x) ** 2 + (midY - brain.y) ** 2,
       )
     }
     const proximityToBrain = 1 - clamp(handToBrainDistance / BRAIN_DIST_MAX, 0, 1)
@@ -259,9 +307,7 @@ export function useVisionTracking(
       return
     }
 
-    const dist  = Math.abs(hand.rightHandX - hand.leftHandX)
-    const avgY  = (hand.leftHandY + hand.rightHandY) / 2
-    const yDiff = Math.abs(hand.leftHandY - hand.rightHandY)
+    const { dist, avgY, yDiff } = metrics!
 
     const inBottomArea      = avgY > BOTTOM_Y_THRESHOLD
     const yAligned          = yDiff < Y_ALIGN_MAX
@@ -385,20 +431,13 @@ export function useVisionTracking(
     if (isOpen && !wasOpenRef.current) particleTriggerCountRef.current++
     wasOpenRef.current = isOpen
 
-    // ── currentInteraction (priority order) ──────────────────────────────────
-    const gs = gestureStateRef.current
-    let currentInteraction: CurrentInteraction = 'idle'
-    if (gs === 'absorbing') {
-      currentInteraction = 'absorbing'
-    } else if (shakeStrength > SHAKE_TRIGGER) {
-      currentInteraction = 'scattering'
-    } else if (proximityToBrain > NEAR_BRAIN_TRIGGER) {
-      currentInteraction = 'nearBrain'
-    } else if (compressionStrength > COMPRESS_TRIGGER) {
-      currentInteraction = 'compressing'
-    } else if (isHandStill && gs !== 'idle') {
-      currentInteraction = 'hovering'
-    }
+    const currentInteraction = getCurrentInteraction({
+      gestureState: gestureStateRef.current,
+      shakeStrength,
+      proximityToBrain,
+      compressionStrength,
+      isHandStill,
+    })
 
     const spawnX       = (hand.leftHandX  + hand.rightHandX)  / 2
     const spawnY       = (hand.leftHandY  + hand.rightHandY)  / 2

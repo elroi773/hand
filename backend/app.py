@@ -55,36 +55,43 @@ app.add_middleware(
     allow_headers=['*'],
 )
 
-latest_state = HandState(
-    connected=False,
-    faceDetected=False,
-    faceCount=0,
-    faceCx=0.5,
-    faceCy=0.3,
-    faceForeheadY=0.15,
-    leftHandDetected=False,
-    leftHandX=0.3,
-    leftHandY=0.7,
-    leftPalmCenterX=0.3,
-    leftPalmCenterY=0.7,
-    leftPalmOpenScore=0.0,
-    leftWristX=0.3,
-    leftWristY=0.7,
-    rightHandDetected=False,
-    rightHandX=0.7,
-    rightHandY=0.7,
-    rightPalmCenterX=0.7,
-    rightPalmCenterY=0.7,
-    rightPalmOpenScore=0.0,
-    rightWristX=0.7,
-    rightWristY=0.7,
-    handDetected=False,
-    openHand=False,
-    confidence=0.0,
-    x=0.5,
-    y=0.6,
-    message='waiting for webcam',
-)
+
+def _make_state(**overrides: Any) -> HandState:
+    values = {
+        'connected': False,
+        'faceDetected': False,
+        'faceCount': 0,
+        'faceCx': 0.5,
+        'faceCy': 0.3,
+        'faceForeheadY': 0.15,
+        'leftHandDetected': False,
+        'leftHandX': 0.3,
+        'leftHandY': 0.7,
+        'leftPalmCenterX': 0.3,
+        'leftPalmCenterY': 0.7,
+        'leftPalmOpenScore': 0.0,
+        'leftWristX': 0.3,
+        'leftWristY': 0.7,
+        'rightHandDetected': False,
+        'rightHandX': 0.7,
+        'rightHandY': 0.7,
+        'rightPalmCenterX': 0.7,
+        'rightPalmCenterY': 0.7,
+        'rightPalmOpenScore': 0.0,
+        'rightWristX': 0.7,
+        'rightWristY': 0.7,
+        'handDetected': False,
+        'openHand': False,
+        'confidence': 0.0,
+        'x': 0.5,
+        'y': 0.6,
+        'message': 'waiting for webcam',
+    }
+    values.update(overrides)
+    return HandState(**values)
+
+
+latest_state = _make_state()
 state_lock = threading.Lock()
 clients: set[asyncio.Queue[dict[str, Any]]] = set()
 loop_ref: asyncio.AbstractEventLoop | None = None
@@ -203,18 +210,8 @@ def _capture_loop() -> None:
                 camera_label = 'forced index' if os.environ.get('CAMERA_INDEX') else 'indices 0-5'
                 selected_index = 'unknown' if active_camera_index is None else str(active_camera_index)
                 with state_lock:
-                    latest_state = HandState(
+                    latest_state = _make_state(
                         connected=False,
-                        faceDetected=False, faceCount=0,
-                        faceCx=0.5, faceCy=0.3, faceForeheadY=0.15,
-                        leftHandDetected=False, leftHandX=0.3, leftHandY=0.7,
-                        leftPalmCenterX=0.3, leftPalmCenterY=0.7, leftPalmOpenScore=0.0,
-                        leftWristX=0.3, leftWristY=0.7,
-                        rightHandDetected=False, rightHandX=0.7, rightHandY=0.7,
-                        rightPalmCenterX=0.7, rightPalmCenterY=0.7, rightPalmOpenScore=0.0,
-                        rightWristX=0.7, rightWristY=0.7,
-                        handDetected=False, openHand=False, confidence=0.0,
-                        x=0.5, y=0.6,
                         message=f'camera not available. tried {camera_label} ({active_backend}, idx={selected_index})',
                     )
                 _broadcast_state(_to_payload(latest_state))
@@ -225,18 +222,8 @@ def _capture_loop() -> None:
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             with state_lock:
-                latest_state = HandState(
+                latest_state = _make_state(
                     connected=True,
-                    faceDetected=False, faceCount=0,
-                    faceCx=0.5, faceCy=0.3, faceForeheadY=0.15,
-                    leftHandDetected=False, leftHandX=0.3, leftHandY=0.7,
-                    leftPalmCenterX=0.3, leftPalmCenterY=0.7, leftPalmOpenScore=0.0,
-                    leftWristX=0.3, leftWristY=0.7,
-                    rightHandDetected=False, rightHandX=0.7, rightHandY=0.7,
-                    rightPalmCenterX=0.7, rightPalmCenterY=0.7, rightPalmOpenScore=0.0,
-                    rightWristX=0.7, rightWristY=0.7,
-                    handDetected=False, openHand=False, confidence=0.0,
-                    x=0.5, y=0.6,
                     message=f'camera ready on index {active_camera_index} using {active_backend}',
                 )
             _broadcast_state(_to_payload(latest_state))
@@ -244,18 +231,8 @@ def _capture_loop() -> None:
         ok, frame = cap.read()
         if not ok:
             with state_lock:
-                latest_state = HandState(
+                latest_state = _make_state(
                     connected=False,
-                    faceDetected=False, faceCount=0,
-                    faceCx=0.5, faceCy=0.3, faceForeheadY=0.15,
-                    leftHandDetected=False, leftHandX=0.3, leftHandY=0.7,
-                    leftPalmCenterX=0.3, leftPalmCenterY=0.7, leftPalmOpenScore=0.0,
-                    leftWristX=0.3, leftWristY=0.7,
-                    rightHandDetected=False, rightHandX=0.7, rightHandY=0.7,
-                    rightPalmCenterX=0.7, rightPalmCenterY=0.7, rightPalmOpenScore=0.0,
-                    rightWristX=0.7, rightWristY=0.7,
-                    handDetected=False, openHand=False, confidence=0.0,
-                    x=0.5, y=0.6,
                     message='camera frame unavailable. retrying',
                 )
             _broadcast_state(_to_payload(latest_state))

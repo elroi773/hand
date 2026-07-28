@@ -65,6 +65,44 @@ const fallbackState: HandSnapshot = {
   message: 'backend not connected',
 }
 
+const normalizeHandSnapshot = (raw: Partial<HandSnapshot>): HandSnapshot => {
+  const leftHandX = raw.leftHandX ?? fallbackState.leftHandX
+  const leftHandY = raw.leftHandY ?? fallbackState.leftHandY
+  const rightHandX = raw.rightHandX ?? fallbackState.rightHandX
+  const rightHandY = raw.rightHandY ?? fallbackState.rightHandY
+
+  return {
+    connected: raw.connected ?? fallbackState.connected,
+    faceDetected: raw.faceDetected ?? fallbackState.faceDetected,
+    faceCount: raw.faceCount ?? fallbackState.faceCount,
+    faceCx: raw.faceCx ?? fallbackState.faceCx,
+    faceCy: raw.faceCy ?? fallbackState.faceCy,
+    faceForeheadY: raw.faceForeheadY ?? fallbackState.faceForeheadY,
+    leftHandDetected: raw.leftHandDetected ?? fallbackState.leftHandDetected,
+    leftHandX,
+    leftHandY,
+    leftPalmCenterX: raw.leftPalmCenterX ?? leftHandX,
+    leftPalmCenterY: raw.leftPalmCenterY ?? leftHandY,
+    leftPalmOpenScore: raw.leftPalmOpenScore ?? fallbackState.leftPalmOpenScore,
+    leftWristX: raw.leftWristX ?? leftHandX,
+    leftWristY: raw.leftWristY ?? leftHandY,
+    rightHandDetected: raw.rightHandDetected ?? fallbackState.rightHandDetected,
+    rightHandX,
+    rightHandY,
+    rightPalmCenterX: raw.rightPalmCenterX ?? rightHandX,
+    rightPalmCenterY: raw.rightPalmCenterY ?? rightHandY,
+    rightPalmOpenScore: raw.rightPalmOpenScore ?? fallbackState.rightPalmOpenScore,
+    rightWristX: raw.rightWristX ?? rightHandX,
+    rightWristY: raw.rightWristY ?? rightHandY,
+    handDetected: raw.handDetected ?? fallbackState.handDetected,
+    openHand: raw.openHand ?? fallbackState.openHand,
+    confidence: raw.confidence ?? fallbackState.confidence,
+    x: raw.x ?? fallbackState.x,
+    y: raw.y ?? fallbackState.y,
+    message: raw.message ?? '',
+  }
+}
+
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t
 
@@ -295,36 +333,7 @@ export function useHandStream() {
         setLastPacketAt(Date.now())
         try {
           const raw = JSON.parse(event.data as string) as Partial<HandSnapshot>
-          setHand({
-            connected:          raw.connected          ?? false,
-            faceDetected:       raw.faceDetected       ?? false,
-            faceCount:          raw.faceCount          ?? 0,
-            faceCx:             raw.faceCx             ?? 0.5,
-            faceCy:             raw.faceCy             ?? 0.3,
-            faceForeheadY:      raw.faceForeheadY      ?? 0.12,
-            leftHandDetected:   raw.leftHandDetected   ?? false,
-            leftHandX:          raw.leftHandX          ?? 0.3,
-            leftHandY:          raw.leftHandY          ?? 0.7,
-            leftPalmCenterX:    raw.leftPalmCenterX    ?? (raw.leftHandX  ?? 0.3),
-            leftPalmCenterY:    raw.leftPalmCenterY    ?? (raw.leftHandY  ?? 0.7),
-            leftPalmOpenScore:  raw.leftPalmOpenScore  ?? 0,
-            leftWristX:         raw.leftWristX         ?? (raw.leftHandX  ?? 0.3),
-            leftWristY:         raw.leftWristY         ?? (raw.leftHandY  ?? 0.7),
-            rightHandDetected:  raw.rightHandDetected  ?? false,
-            rightHandX:         raw.rightHandX         ?? 0.7,
-            rightHandY:         raw.rightHandY         ?? 0.7,
-            rightPalmCenterX:   raw.rightPalmCenterX   ?? (raw.rightHandX ?? 0.7),
-            rightPalmCenterY:   raw.rightPalmCenterY   ?? (raw.rightHandY ?? 0.7),
-            rightPalmOpenScore: raw.rightPalmOpenScore ?? 0,
-            rightWristX:        raw.rightWristX        ?? (raw.rightHandX ?? 0.7),
-            rightWristY:        raw.rightWristY        ?? (raw.rightHandY ?? 0.7),
-            handDetected:       raw.handDetected       ?? false,
-            openHand:           raw.openHand           ?? false,
-            confidence:         raw.confidence         ?? 0,
-            x:                  raw.x                  ?? 0.5,
-            y:                  raw.y                  ?? 0.6,
-            message:            raw.message            ?? '',
-          })
+          setHand(normalizeHandSnapshot(raw))
         } catch {
           setHand((current) => ({ ...current, message: 'invalid backend message' }))
         }
