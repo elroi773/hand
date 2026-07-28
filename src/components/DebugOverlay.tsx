@@ -41,6 +41,45 @@ type DotDef = {
   show: boolean
 }
 
+const INTERACTION_COLORS: Record<TrackingState['currentInteraction'], string> = {
+  absorbing: '#ff88ff',
+  scattering: '#ff6666',
+  nearBrain: '#44ff88',
+  compressing: '#a888ff',
+  hovering: '#7af0d1',
+  idle: '#888',
+}
+
+const GESTURE_COLORS: Record<TrackingState['gestureState'], string> = {
+  absorbing: '#ff88ff',
+  emitting: '#7af0d1',
+  opening: '#ffe87a',
+  palms_ready: '#aaddff',
+  cooldown: '#ff9944',
+  idle: '#888',
+}
+
+function connectionColor(connection: Props['connection']): string {
+  if (connection === 'connected') return '#55ff88'
+  if (connection === 'connecting') return '#ffcc44'
+  return '#ff5555'
+}
+
+function getBrainNorm(hand: HandSnapshot): [number, number] {
+  if (!hand.faceDetected) return [0.5, 0.22]
+
+  const faceHeight = (hand.faceCy - hand.faceForeheadY) / 0.65
+  return [hand.faceCx, hand.faceCy - faceHeight * 0.25]
+}
+
+function DebugBar({ value, color }: { value: number; color: string }) {
+  return (
+    <div className="dbg-bar">
+      <div className="dbg-bar-fill" style={{ width: pct(value), background: color }} />
+    </div>
+  )
+}
+
 export function DebugOverlay({ hand, tracking, connection, lastPacketAt, cameraActive, videoRef, debugMode, particleCountRef, absorbedCount = 0 }: Props) {
   if (!debugMode) return null
 
@@ -50,13 +89,7 @@ export function DebugOverlay({ hand, tracking, connection, lastPacketAt, cameraA
   const wW = window.innerWidth
   const wH = window.innerHeight
 
-  let brainNormX = 0.5
-  let brainNormY = 0.22
-  if (hand.faceDetected) {
-    const faceHeight = (hand.faceCy - hand.faceForeheadY) / 0.65
-    brainNormX = hand.faceCx
-    brainNormY = hand.faceCy - faceHeight * 0.25
-  }
+  const [brainNormX, brainNormY] = getBrainNorm(hand)
 
   const handsDetected = hand.leftHandDetected || hand.rightHandDetected
 
@@ -69,17 +102,12 @@ export function DebugOverlay({ hand, tracking, connection, lastPacketAt, cameraA
     { label: 'R wrist',  color: '#ffcc88', normX: hand.rightWristX,     normY: hand.rightWristY,     show: hand.rightHandDetected },
   ]
 
-  const connColor = connection === 'connected' ? '#55ff88' : connection === 'connecting' ? '#ffcc44' : '#ff5555'
+  const connColor = connectionColor(connection)
   const backendOk = connection === 'connected'
 
   const gs = tracking.gestureState
-  const gsColor =
-    gs === 'absorbing'   ? '#ff88ff'
-    : gs === 'emitting'  ? '#7af0d1'
-    : gs === 'opening'   ? '#ffe87a'
-    : gs === 'palms_ready' ? '#aaddff'
-    : gs === 'cooldown'  ? '#ff9944'
-    : '#888'
+  const gsColor = GESTURE_COLORS[gs]
+  const interactionColor = INTERACTION_COLORS[tracking.currentInteraction]
 
   const particleCount = particleCountRef?.current ?? 0
 
@@ -122,9 +150,7 @@ export function DebugOverlay({ hand, tracking, connection, lastPacketAt, cameraA
         </div>
         <div className="dbg-row">
           <span>progress: </span>
-          <div className="dbg-bar">
-            <div className="dbg-bar-fill" style={{ width: pct(tracking.bookOpenProgress), background: tracking.isBookOpen ? '#7af0d1' : '#ffe87a' }} />
-          </div>
+          <DebugBar value={tracking.bookOpenProgress} color={tracking.isBookOpen ? '#7af0d1' : '#ffe87a'} />
           <span> <b>{pct(tracking.bookOpenProgress)}</b></span>
         </div>
         <div className="dbg-row">
@@ -143,9 +169,7 @@ export function DebugOverlay({ hand, tracking, connection, lastPacketAt, cameraA
         </div>
         <div className="dbg-row">
           <span>absorbStr: </span>
-          <div className="dbg-bar">
-            <div className="dbg-bar-fill" style={{ width: pct(tracking.absorbStrength), background: '#ff88ff' }} />
-          </div>
+          <DebugBar value={tracking.absorbStrength} color="#ff88ff" />
           <span> <b>{pct(tracking.absorbStrength)}</b></span>
         </div>
         <div className="dbg-row">
@@ -160,44 +184,27 @@ export function DebugOverlay({ hand, tracking, connection, lastPacketAt, cameraA
         <div className="dbg-divider" />
 
         {/* ── Interaction state ──────────────────────────────────── */}
-        {(() => {
-          const iColor =
-            tracking.currentInteraction === 'absorbing'   ? '#ff88ff'
-            : tracking.currentInteraction === 'scattering'  ? '#ff6666'
-            : tracking.currentInteraction === 'nearBrain'   ? '#44ff88'
-            : tracking.currentInteraction === 'compressing' ? '#a888ff'
-            : tracking.currentInteraction === 'hovering'    ? '#7af0d1'
-            : '#888'
-          return (
-            <>
-              <div className="dbg-row">
-                <span>interact: <b style={{ color: iColor }}>{tracking.currentInteraction}</b></span>
-              </div>
-              <div className="dbg-row">
-                <span>palmVX: <b>{val(tracking.palmVelocityX)}</b></span>
-                <span>  shake: </span>
-                <div className="dbg-bar">
-                  <div className="dbg-bar-fill" style={{ width: pct(tracking.shakeStrength), background: '#ff8888' }} />
-                </div>
-              </div>
-              <div className="dbg-row">
-                <span>compress: </span>
-                <div className="dbg-bar">
-                  <div className="dbg-bar-fill" style={{ width: pct(tracking.compressionStrength), background: '#a888ff' }} />
-                </div>
-                <span> <b>{pct(tracking.compressionStrength)}</b></span>
-              </div>
-              <div className="dbg-row" style={{ fontSize: '10px' }}>
-                <span>brainDist: <b>{val(tracking.handToBrainDistance)}</b></span>
-                <span>  prox: <b style={{ color: tracking.proximityToBrain > 0.65 ? '#44ff88' : '#aaa' }}>{pct(tracking.proximityToBrain)}</b></span>
-              </div>
-              <div className="dbg-row" style={{ fontSize: '10px' }}>
-                <span>still: <b style={{ color: tracking.isHandStill ? '#7af0d1' : '#888' }}>{tracking.isHandStill ? '✓' : '✗'}</b></span>
-                <span>  avgOpen: <b>{pct(tracking.avgPalmOpenScore)}</b></span>
-              </div>
-            </>
-          )
-        })()}
+        <div className="dbg-row">
+          <span>interact: <b style={{ color: interactionColor }}>{tracking.currentInteraction}</b></span>
+        </div>
+        <div className="dbg-row">
+          <span>palmVX: <b>{val(tracking.palmVelocityX)}</b></span>
+          <span>  shake: </span>
+          <DebugBar value={tracking.shakeStrength} color="#ff8888" />
+        </div>
+        <div className="dbg-row">
+          <span>compress: </span>
+          <DebugBar value={tracking.compressionStrength} color="#a888ff" />
+          <span> <b>{pct(tracking.compressionStrength)}</b></span>
+        </div>
+        <div className="dbg-row" style={{ fontSize: '10px' }}>
+          <span>brainDist: <b>{val(tracking.handToBrainDistance)}</b></span>
+          <span>  prox: <b style={{ color: tracking.proximityToBrain > 0.65 ? '#44ff88' : '#aaa' }}>{pct(tracking.proximityToBrain)}</b></span>
+        </div>
+        <div className="dbg-row" style={{ fontSize: '10px' }}>
+          <span>still: <b style={{ color: tracking.isHandStill ? '#7af0d1' : '#888' }}>{tracking.isHandStill ? '✓' : '✗'}</b></span>
+          <span>  avgOpen: <b>{pct(tracking.avgPalmOpenScore)}</b></span>
+        </div>
 
         <div className="dbg-divider" />
 

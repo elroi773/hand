@@ -20,6 +20,8 @@ const CHARS = [
 const PARTICLE_COLORS = ['#7af0d1', '#ffe87a', '#a0c4ff', '#ffb3de', '#c3f584']
 const MAX_PARTICLES = 350
 
+const pickRandom = <T,>(items: T[]): T => items[Math.floor(Math.random() * items.length)]
+
 // ─── Texture cache ─────────────────────────────────────────────────────────────
 const textureCache = new Map<string, THREE.CanvasTexture>()
 
@@ -75,6 +77,14 @@ type KnowledgeParticle = {
 }
 
 type SpawnPoint = { nx: number; ny: number; source: string }
+type DebugDotPoint = { nx: number; ny: number; show: boolean }
+type ThreePoint = { x: number; y: number }
+type RenderBounds = {
+  videoW: number
+  videoH: number
+  winW: number
+  winH: number
+}
 
 type Props = {
   tracking: TrackingState
@@ -103,6 +113,140 @@ function getPalmSpawnPoints(h: HandSnapshot): SpawnPoint[] {
   if (h.rightHandDetected) pts.push({ nx: h.rightPalmCenterX, ny: h.rightPalmCenterY, source: 'rightPalm' })
   if (pts.length === 0)    pts.push({ nx: 0.5, ny: 0.82, source: 'screenFallback' })
   return pts
+}
+
+function toThreePoint(nx: number, ny: number, bounds: RenderBounds): ThreePoint {
+  const [x, y] = normToThree(nx, ny, bounds.videoW, bounds.videoH, bounds.winW, bounds.winH)
+  return { x, y }
+}
+
+function getAveragePalmPoint(h: HandSnapshot, bounds: RenderBounds): ThreePoint {
+  const palmPoints: ThreePoint[] = []
+
+  if (h.leftHandDetected) {
+    palmPoints.push(toThreePoint(h.leftPalmCenterX, h.leftPalmCenterY, bounds))
+  }
+  if (h.rightHandDetected) {
+    palmPoints.push(toThreePoint(h.rightPalmCenterX, h.rightPalmCenterY, bounds))
+  }
+
+  if (palmPoints.length === 0) return { x: 0, y: 0 }
+
+  return {
+    x: palmPoints.reduce((sum, point) => sum + point.x, 0) / palmPoints.length,
+    y: palmPoints.reduce((sum, point) => sum + point.y, 0) / palmPoints.length,
+  }
+}
+
+function getDebugDotPoints(h: HandSnapshot, brainX: number, brainY: number): DebugDotPoint[] {
+  return [
+    { nx: h.faceCx,           ny: h.faceCy,           show: h.faceDetected },
+    { nx: brainX,             ny: brainY,             show: true },
+    { nx: h.leftPalmCenterX,  ny: h.leftPalmCenterY,  show: h.leftHandDetected },
+    { nx: h.rightPalmCenterX, ny: h.rightPalmCenterY, show: h.rightHandDetected },
+  ]
+}
+
+function cubicBezierPoint(p: KnowledgeParticle, t: number): ThreePoint {
+  const mt = 1 - t
+
+  return {
+    x: mt * mt * mt * p.sx + 3 * mt * mt * t * p.c1x + 3 * mt * t * t * p.c2x + t * t * t * p.tx,
+    y: mt * mt * mt * p.sy + 3 * mt * mt * t * p.c1y + 3 * mt * t * t * p.c2y + t * t * t * p.ty,
+  }
+}
+
+function getParticleSizeFactor(p: KnowledgeParticle, interaction: TrackingState['currentInteraction'], elapsed: number): number {
+  const t = p.t
+  let sizeFactor: number
+
+  if (t < 0.12) {
+    sizeFactor = 0.4 + t / 0.12 * 0.6
+  } else if (t < 0.65) {
+    sizeFactor = 1.0
+  } else {
+    sizeFactor = Math.max(0.04, 1.0 - (t - 0.65) / 0.35 * 0.96)
+  }
+
+  if (interaction === 'hovering' && p.hoverAge > 0) {
+    sizeFactor *= 0.9 + Math.sin(elapsed * 3 + p.phase) * 0.1
+  }
+
+  return sizeFactor
+}
+
+function getParticleOpacity(p: KnowledgeParticle, interaction: TrackingState['currentInteraction']): number {
+  const t = p.t
+  let opacity: number
+
+  if (t < 0.12) {
+    opacity = t / 0.12
+  } else if (t < 0.68) {
+    opacity = 1.0
+  } else {
+    opacity = Math.max(0, 1.0 - (t - 0.68) / 0.32)
+  }
+
+  if (interaction === 'scattering') {
+    opacity *= Math.max(0, 1 - t * 1.5)
+  }
+
+  return opacity
+}
+
+function scatterParticle(p: KnowledgeParticle, dt: number): void {
+  if (p.scatterVX === 0 && p.scatterVY === 0) {
+    const angle = Math.random() * Math.PI * 2
+    const speed = 150 + Math.random() * 200
+    p.scatterVX = Math.cos(angle) * speed
+    p.scatterVY = Math.sin(angle) * speed * 0.7
+  }
+
+  p.sprite.position.x += p.scatterVX * dt
+  p.sprite.position.y += p.scatterVY * dt
+
+  const decay = Math.pow(0.1, dt)
+  p.scatterVX *= decay
+  p.scatterVY *= decay
+  p.hoverAge = 0
+  p.t += p.baseSpeed * dt * 3
+}
+
+function hoverParticle(p: KnowledgeParticle, dt: number, elapsed: number): void {
+  p.scatterVX = 0
+  p.scatterVY = 0
+  p.hoverAge += dt
+
+  const point = cubicBezierPoint(p, p.t)
+  point.x += Math.sin(elapsed * 2.2 + p.phase) * 18
+  point.y += Math.cos(elapsed * 1.6 + p.phase * 1.4) * 12
+  p.sprite.position.set(point.x, point.y, 0)
+}
+
+function moveParticleTowardPalm(
+  p: KnowledgeParticle,
+  compressionStrength: number,
+  dt: number,
+): void {
+  const dx = p.palmCx3 - p.sprite.position.x
+  const dy = p.palmCy3 - p.sprite.position.y
+  const dist = Math.sqrt(dx * dx + dy * dy) || 1
+  const force = compressionStrength * 160 * dt
+
+  p.sprite.position.x += (dx / dist) * force
+  p.sprite.position.y += (dy / dist) * force
+}
+
+function moveParticleOnBezier(p: KnowledgeParticle, elapsed: number): void {
+  const point = cubicBezierPoint(p, p.t)
+  const swirlAmount = Math.sin(elapsed * 3.5 + p.phase) * 20 * (1 - p.t * p.t)
+  const dx = p.tx - p.sx
+  const dy = p.ty - p.sy
+  const distance = Math.sqrt(dx * dx + dy * dy) || 1
+
+  point.x += (-dy / distance) * swirlAmount
+  point.y += (dx / distance) * swirlAmount
+  p.sprite.position.set(point.x, point.y, 0)
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -173,8 +317,8 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP,
     ) => {
       if (particles.length >= MAX_PARTICLES) return
 
-      const char  = CHARS[Math.floor(Math.random() * CHARS.length)]
-      const color = PARTICLE_COLORS[Math.floor(Math.random() * PARTICLE_COLORS.length)]
+      const char  = pickRandom(CHARS)
+      const color = pickRandom(PARTICLE_COLORS)
 
       const mat = new THREE.SpriteMaterial({
         map: getCharTexture(char, color),
@@ -243,22 +387,12 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP,
       const vH  = vid?.videoHeight || 720
       W = window.innerWidth
       H = window.innerHeight
+      const bounds = { videoW: vW, videoH: vH, winW: W, winH: H }
 
       const [bnx, bny] = brainNorm(h)
       const palmPts    = getPalmSpawnPoints(h)
-      const [btx, bty] = normToThree(bnx, bny, vW, vH, W, H)
-
-      // ── Avg palm center in Three.js space (for compression target) ────────
-      let avgPalmX3 = 0, avgPalmY3 = 0, palmCount = 0
-      if (h.leftHandDetected) {
-        const [lx, ly] = normToThree(h.leftPalmCenterX, h.leftPalmCenterY, vW, vH, W, H)
-        avgPalmX3 += lx; avgPalmY3 += ly; palmCount++
-      }
-      if (h.rightHandDetected) {
-        const [rx, ry] = normToThree(h.rightPalmCenterX, h.rightPalmCenterY, vW, vH, W, H)
-        avgPalmX3 += rx; avgPalmY3 += ry; palmCount++
-      }
-      if (palmCount > 0) { avgPalmX3 /= palmCount; avgPalmY3 /= palmCount }
+      const brainTarget = toThreePoint(bnx, bny, bounds)
+      const avgPalm = getAveragePalmPoint(h, bounds)
 
       const interaction = tr.currentInteraction
 
@@ -268,18 +402,13 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP,
         : 1
 
       // ── Debug dots ────────────────────────────────────────────────────────
-      const dotDefs = [
-        { nx: h.faceCx,           ny: h.faceCy,           show: h.faceDetected },
-        { nx: bnx,                ny: bny,                show: true },
-        { nx: h.leftPalmCenterX,  ny: h.leftPalmCenterY,  show: h.leftHandDetected },
-        { nx: h.rightPalmCenterX, ny: h.rightPalmCenterY, show: h.rightHandDetected },
-      ]
+      const dotDefs = getDebugDotPoints(h, bnx, bny)
       debugDots.forEach((sp, i) => {
         const visible = dbg && dotDefs[i].show
         ;(sp.material as THREE.SpriteMaterial).opacity = visible ? 0.85 : 0
         if (visible) {
-          const [wx, wy] = normToThree(dotDefs[i].nx, dotDefs[i].ny, vW, vH, W, H)
-          sp.position.set(wx, wy, 1)
+          const point = toThreePoint(dotDefs[i].nx, dotDefs[i].ny, bounds)
+          sp.position.set(point.x, point.y, 1)
         }
       })
 
@@ -292,8 +421,8 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP,
           + ` burstPerPalm=${burstPerPalm} sources=${palmPts.map((p) => p.source).join(',')}`,
         )
         for (const pt of palmPts) {
-          const [cx3, cy3] = normToThree(pt.nx, pt.ny, vW, vH, W, H)
-          spawnBurst(cx3, cy3, btx, bty, burstPerPalm, 1.4, 0.55, 0)
+          const source = toThreePoint(pt.nx, pt.ny, bounds)
+          spawnBurst(source.x, source.y, brainTarget.x, brainTarget.y, burstPerPalm, 1.4, 0.55, 0)
         }
       }
 
@@ -305,8 +434,8 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP,
         while (spawnAccum >= interval && particles.length < MAX_PARTICLES) {
           spawnAccum -= interval
           for (const pt of palmPts) {
-            const [sx, sy] = normToThree(pt.nx, pt.ny, vW, vH, W, H)
-            spawnParticle(sx, sy, btx, bty, 1.0, 1.0, tr.absorbStrength)
+            const source = toThreePoint(pt.nx, pt.ny, bounds)
+            spawnParticle(source.x, source.y, brainTarget.x, brainTarget.y, 1.0, 1.0, tr.absorbStrength)
           }
         }
       } else {
@@ -319,9 +448,9 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP,
         const sources = palmPts.map((p) => p.source).join(', ')
         console.log(`[particles] P pressed — sources: ${sources}`)
         for (const pt of palmPts) {
-          const [cx3, cy3] = normToThree(pt.nx, pt.ny, vW, vH, W, H)
+          const source = toThreePoint(pt.nx, pt.ny, bounds)
           console.log(`[particles] spawn source=${pt.source} nx=${pt.nx.toFixed(3)} ny=${pt.ny.toFixed(3)} count=18`)
-          spawnBurst(cx3, cy3, btx, bty, 18, 1.4, 0.7, 0.5)
+          spawnBurst(source.x, source.y, brainTarget.x, brainTarget.y, 18, 1.4, 0.7, 0.5)
         }
         console.log(`[particles] total after P: ${particles.length}`)
       }
@@ -332,9 +461,9 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP,
         const sources = palmPts.map((p) => p.source).join(', ')
         console.log(`[particles] Space pressed — sources: ${sources}`)
         for (const pt of palmPts) {
-          const [cx3, cy3] = normToThree(pt.nx, pt.ny, vW, vH, W, H)
+          const source = toThreePoint(pt.nx, pt.ny, bounds)
           console.log(`[particles] spawn source=${pt.source} nx=${pt.nx.toFixed(3)} ny=${pt.ny.toFixed(3)} count=50`)
-          spawnBurst(cx3, cy3, btx, bty, 50, 1.6, 0.5, 0.7)
+          spawnBurst(source.x, source.y, brainTarget.x, brainTarget.y, 50, 1.6, 0.5, 0.7)
         }
         console.log(`[particles] total after Space: ${particles.length}`)
       }
@@ -344,40 +473,16 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP,
 
       for (let i = particles.length - 1; i >= 0; i--) {
         const p = particles[i]
-        p.palmCx3 = avgPalmX3
-        p.palmCy3 = avgPalmY3
+        p.palmCx3 = avgPalm.x
+        p.palmCy3 = avgPalm.y
 
         if (interaction === 'scattering') {
-          // Assign random scatter velocity on first scatter frame
-          if (p.scatterVX === 0 && p.scatterVY === 0) {
-            const angle = Math.random() * Math.PI * 2
-            const spd   = 150 + Math.random() * 200
-            p.scatterVX = Math.cos(angle) * spd
-            p.scatterVY = Math.sin(angle) * spd * 0.7
-          }
-          p.sprite.position.x += p.scatterVX * dt
-          p.sprite.position.y += p.scatterVY * dt
-          // Exponential velocity decay (reach ~10% in 1 s)
-          const decay = Math.pow(0.1, dt)
-          p.scatterVX *= decay
-          p.scatterVY *= decay
-          p.hoverAge = 0
-          p.t += p.baseSpeed * dt * 3   // advance faster so scattered particles die quickly
-
+          scatterParticle(p, dt)
         } else if (interaction === 'hovering' && p.t > 0.08 && p.t < 0.85) {
-          // Freeze t, gently oscillate around bezier position
-          p.scatterVX = 0; p.scatterVY = 0
-          p.hoverAge += dt
-          const t = p.t; const mt = 1 - t
-          let bx = mt*mt*mt*p.sx + 3*mt*mt*t*p.c1x + 3*mt*t*t*p.c2x + t*t*t*p.tx
-          let by = mt*mt*mt*p.sy + 3*mt*mt*t*p.c1y + 3*mt*t*t*p.c2y + t*t*t*p.ty
-          bx += Math.sin(elapsed * 2.2 + p.phase)       * 18
-          by += Math.cos(elapsed * 1.6 + p.phase * 1.4) * 12
-          p.sprite.position.set(bx, by, 0)
-          // t does not advance during hover
-
+          hoverParticle(p, dt, elapsed)
         } else {
-          p.scatterVX = 0; p.scatterVY = 0
+          p.scatterVX = 0
+          p.scatterVY = 0
           p.hoverAge  = 0
 
           let effectiveSpeed = p.baseSpeed * speedMult
@@ -388,27 +493,9 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP,
           p.t += effectiveSpeed * dt
 
           if (interaction === 'compressing') {
-            // Attract toward avg palm center while slowly advancing
-            const px = p.sprite.position.x
-            const py = p.sprite.position.y
-            const cdx  = p.palmCx3 - px
-            const cdy  = p.palmCy3 - py
-            const cdist = Math.sqrt(cdx * cdx + cdy * cdy) || 1
-            const force = tr.compressionStrength * 160 * dt
-            p.sprite.position.x += (cdx / cdist) * force
-            p.sprite.position.y += (cdy / cdist) * force
+            moveParticleTowardPalm(p, tr.compressionStrength, dt)
           } else {
-            // Normal cubic bezier path
-            const t = p.t; const mt = 1 - t
-            let x = mt*mt*mt*p.sx + 3*mt*mt*t*p.c1x + 3*mt*t*t*p.c2x + t*t*t*p.tx
-            let y = mt*mt*mt*p.sy + 3*mt*mt*t*p.c1y + 3*mt*t*t*p.c2y + t*t*t*p.ty
-            // Organic swirl (fades out near brain)
-            const swirlAmt = Math.sin(elapsed * 3.5 + p.phase) * 20 * (1 - t * t)
-            const sdx = p.tx - p.sx; const sdy = p.ty - p.sy
-            const slen = Math.sqrt(sdx * sdx + sdy * sdy) || 1
-            x += (-sdy / slen) * swirlAmt
-            y += ( sdx / slen) * swirlAmt
-            p.sprite.position.set(x, y, 0)
+            moveParticleOnBezier(p, elapsed)
           }
         }
 
@@ -420,34 +507,8 @@ export function ThreeOverlay({ tracking, hand, videoRef, debugMode, forceSpawnP,
           continue
         }
 
-        // ── Size ────────────────────────────────────────────────────────────
-        const t = p.t
-        let sizeFactor: number
-        if (t < 0.12) {
-          sizeFactor = 0.4 + t / 0.12 * 0.6
-        } else if (t < 0.65) {
-          sizeFactor = 1.0
-        } else {
-          sizeFactor = Math.max(0.04, 1.0 - (t - 0.65) / 0.35 * 0.96)
-        }
-        if (interaction === 'hovering' && p.hoverAge > 0) {
-          sizeFactor *= 0.9 + Math.sin(elapsed * 3 + p.phase) * 0.1
-        }
-        p.sprite.scale.setScalar(p.baseSize * sizeFactor)
-
-        // ── Opacity ─────────────────────────────────────────────────────────
-        let opacity: number
-        if (t < 0.12) {
-          opacity = t / 0.12
-        } else if (t < 0.68) {
-          opacity = 1.0
-        } else {
-          opacity = Math.max(0, 1.0 - (t - 0.68) / 0.32)
-        }
-        if (interaction === 'scattering') {
-          opacity *= Math.max(0, 1 - t * 1.5)
-        }
-        p.sprite.material.opacity = opacity
+        p.sprite.scale.setScalar(p.baseSize * getParticleSizeFactor(p, interaction, elapsed))
+        p.sprite.material.opacity = getParticleOpacity(p, interaction)
       }
 
       if (absorbedThisFrame > 0 && onAbsorbRef.current) {
