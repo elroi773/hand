@@ -46,6 +46,19 @@ class HandState:
     message: str
 
 
+@dataclass
+class DetectedHand:
+    x: float
+    y: float
+    wrist_x: float
+    wrist_y: float
+    palm_cx: float
+    palm_cy: float
+    open_hand: bool
+    confidence: float
+    palm_open_score: float
+
+
 app = FastAPI(title='Hand Book Demo API')
 app.add_middleware(
     CORSMiddleware,
@@ -136,6 +149,124 @@ def _palm_center(landmarks: list[Any]) -> tuple[float, float]:
     x = round(sum(landmarks[i].x for i in idx) / len(idx), 4)
     y = round(sum(landmarks[i].y for i in idx) / len(idx), 4)
     return x, y
+
+
+def _detect_hands(result: Any) -> list[DetectedHand]:
+    if not result.multi_hand_landmarks:
+        return []
+
+    detected_hands: list[DetectedHand] = []
+    for hand_lm in result.multi_hand_landmarks:
+        landmarks = hand_lm.landmark
+        xs = [p.x for p in landmarks]
+        ys = [p.y for p in landmarks]
+        cx = sum(xs) / len(xs)
+        cy = sum(ys) / len(ys)
+
+        palm_score = _palm_open_score(landmarks)
+        palm_cx, palm_cy = _palm_center(landmarks)
+        detected_hands.append(DetectedHand(
+            x=cx,
+            y=cy,
+            wrist_x=landmarks[0].x,
+            wrist_y=landmarks[0].y,
+            palm_cx=palm_cx,
+            palm_cy=palm_cy,
+            open_hand=palm_score >= 0.5,
+            confidence=min(1.0, 0.55 + palm_score * 0.45),
+            palm_open_score=palm_score,
+        ))
+
+    return detected_hands
+
+
+def _split_screen_hands(
+    detected_hands: list[DetectedHand],
+) -> tuple[DetectedHand | None, DetectedHand | None]:
+    if len(detected_hands) == 1:
+        hand = detected_hands[0]
+        return (hand, None) if hand.x < 0.5 else (None, hand)
+
+    if len(detected_hands) >= 2:
+        sorted_hands = sorted(detected_hands, key=lambda hand: hand.x)
+        return sorted_hands[0], sorted_hands[-1]
+
+    return None, None
+
+
+def _log_detection(
+    detected_hands: list[DetectedHand],
+    left_hand: DetectedHand | None,
+    right_hand: DetectedHand | None,
+    face_detected: bool,
+    brightness: float,
+    camera_index: int | None,
+) -> None:
+    print(
+        f'[vision] hands={len(detected_hands)} face={face_detected}'
+        f' brightness={brightness:.0f} cam={camera_index}',
+        flush=True,
+    )
+    if left_hand:
+        print(
+            f'[vision] left=({left_hand.x:.2f},{left_hand.y:.2f})'
+            f' palmCtr=({left_hand.palm_cx:.2f},{left_hand.palm_cy:.2f})'
+            f' open={left_hand.palm_open_score:.2f}',
+            flush=True,
+        )
+    if right_hand:
+        print(
+            f'[vision] right=({right_hand.x:.2f},{right_hand.y:.2f})'
+            f' palmCtr=({right_hand.palm_cx:.2f},{right_hand.palm_cy:.2f})'
+            f' open={right_hand.palm_open_score:.2f}',
+            flush=True,
+        )
+    if not detected_hands:
+        print('[vision] no hands detected', flush=True)
+
+
+def _state_from_detection(
+    face_detected: bool,
+    face_count: int,
+    face_cx: float,
+    face_cy: float,
+    face_forehead_y: float,
+    left_hand: DetectedHand | None,
+    right_hand: DetectedHand | None,
+) -> HandState:
+    primary = left_hand or right_hand
+    hand_detected = primary is not None
+
+    return _make_state(
+        connected=True,
+        faceDetected=face_detected,
+        faceCount=face_count,
+        faceCx=face_cx,
+        faceCy=face_cy,
+        faceForeheadY=face_forehead_y,
+        leftHandDetected=left_hand is not None,
+        leftHandX=left_hand.x if left_hand else 0.3,
+        leftHandY=left_hand.y if left_hand else 0.7,
+        leftPalmCenterX=left_hand.palm_cx if left_hand else 0.3,
+        leftPalmCenterY=left_hand.palm_cy if left_hand else 0.7,
+        leftPalmOpenScore=left_hand.palm_open_score if left_hand else 0.0,
+        leftWristX=left_hand.wrist_x if left_hand else 0.3,
+        leftWristY=left_hand.wrist_y if left_hand else 0.7,
+        rightHandDetected=right_hand is not None,
+        rightHandX=right_hand.x if right_hand else 0.7,
+        rightHandY=right_hand.y if right_hand else 0.7,
+        rightPalmCenterX=right_hand.palm_cx if right_hand else 0.7,
+        rightPalmCenterY=right_hand.palm_cy if right_hand else 0.7,
+        rightPalmOpenScore=right_hand.palm_open_score if right_hand else 0.0,
+        rightWristX=right_hand.wrist_x if right_hand else 0.7,
+        rightWristY=right_hand.wrist_y if right_hand else 0.7,
+        handDetected=hand_detected,
+        openHand=primary.open_hand if primary else False,
+        confidence=primary.confidence if primary else 0.0,
+        x=primary.x if primary else 0.5,
+        y=primary.y if primary else 0.6,
+        message='tracking' if hand_detected else 'show both hands near the bottom of the frame',
+    )
 
 
 def _to_payload(state: HandState) -> dict[str, Any]:
@@ -261,107 +392,30 @@ def _capture_loop() -> None:
             face_cy = (fy + fh * 0.5) / h_px
             face_forehead_y = max(0.0, (fy - fh * 0.15) / h_px)
 
-        detected_hands: list[dict[str, Any]] = []
-
-        if result.multi_hand_landmarks:
-            for hand_lm in result.multi_hand_landmarks:
-                landmarks = hand_lm.landmark
-                xs = [p.x for p in landmarks]
-                ys = [p.y for p in landmarks]
-                cx = sum(xs) / len(xs)
-                cy = sum(ys) / len(ys)
-
-                palm_score = _palm_open_score(landmarks)
-                pcx, pcy = _palm_center(landmarks)
-                open_hand = palm_score >= 0.5
-                detected_hands.append({
-                    'x': cx, 'y': cy,
-                    'wristX': landmarks[0].x,
-                    'wristY': landmarks[0].y,
-                    'palmCx': pcx, 'palmCy': pcy,
-                    'openHand': open_hand,
-                    'confidence': min(1.0, 0.55 + palm_score * 0.45),
-                    'palmOpenScore': palm_score,
-                })
-
-        # Screen-x order: smaller x = screen-left, larger x = screen-right
-        left_hand: dict[str, Any] | None = None
-        right_hand: dict[str, Any] | None = None
-
-        if len(detected_hands) == 1:
-            h = detected_hands[0]
-            if h['x'] < 0.5:
-                left_hand = h
-            else:
-                right_hand = h
-        elif len(detected_hands) >= 2:
-            sorted_hands = sorted(detected_hands, key=lambda hd: hd['x'])
-            left_hand = sorted_hands[0]
-            right_hand = sorted_hands[-1]
-
-        primary = left_hand or right_hand
-        hand_detected = primary is not None
-        open_hand = primary['openHand'] if primary else False
-        confidence = primary['confidence'] if primary else 0.0
-        hx = primary['x'] if primary else 0.5
-        hy = primary['y'] if primary else 0.6
+        detected_hands = _detect_hands(result)
+        left_hand, right_hand = _split_screen_hands(detected_hands)
 
         # ── 1-second diagnostic log ───────────────────────────────────────────
         now_t = time.monotonic()
         if now_t - last_log_time >= 1.0:
             last_log_time = now_t
-            brightness = gray.mean()
-            n_hands = len(detected_hands)
-            print(
-                f'[vision] hands={n_hands} face={face_detected}'
-                f' brightness={brightness:.0f} cam={active_camera_index}',
-                flush=True,
+            _log_detection(
+                detected_hands=detected_hands,
+                left_hand=left_hand,
+                right_hand=right_hand,
+                face_detected=face_detected,
+                brightness=gray.mean(),
+                camera_index=active_camera_index,
             )
-            if left_hand:
-                print(
-                    f'[vision] left=({left_hand["x"]:.2f},{left_hand["y"]:.2f})'
-                    f' palmCtr=({left_hand["palmCx"]:.2f},{left_hand["palmCy"]:.2f})'
-                    f' open={left_hand["palmOpenScore"]:.2f}',
-                    flush=True,
-                )
-            if right_hand:
-                print(
-                    f'[vision] right=({right_hand["x"]:.2f},{right_hand["y"]:.2f})'
-                    f' palmCtr=({right_hand["palmCx"]:.2f},{right_hand["palmCy"]:.2f})'
-                    f' open={right_hand["palmOpenScore"]:.2f}',
-                    flush=True,
-                )
-            if n_hands == 0:
-                print('[vision] no hands detected', flush=True)
 
-        state = HandState(
-            connected=True,
-            faceDetected=face_detected,
-            faceCount=int(len(faces)),
-            faceCx=face_cx,
-            faceCy=face_cy,
-            faceForeheadY=face_forehead_y,
-            leftHandDetected=left_hand is not None,
-            leftHandX=left_hand['x'] if left_hand else 0.3,
-            leftHandY=left_hand['y'] if left_hand else 0.7,
-            leftPalmCenterX=left_hand['palmCx'] if left_hand else 0.3,
-            leftPalmCenterY=left_hand['palmCy'] if left_hand else 0.7,
-            leftPalmOpenScore=left_hand['palmOpenScore'] if left_hand else 0.0,
-            leftWristX=left_hand['wristX'] if left_hand else 0.3,
-            leftWristY=left_hand['wristY'] if left_hand else 0.7,
-            rightHandDetected=right_hand is not None,
-            rightHandX=right_hand['x'] if right_hand else 0.7,
-            rightHandY=right_hand['y'] if right_hand else 0.7,
-            rightPalmCenterX=right_hand['palmCx'] if right_hand else 0.7,
-            rightPalmCenterY=right_hand['palmCy'] if right_hand else 0.7,
-            rightPalmOpenScore=right_hand['palmOpenScore'] if right_hand else 0.0,
-            rightWristX=right_hand['wristX'] if right_hand else 0.7,
-            rightWristY=right_hand['wristY'] if right_hand else 0.7,
-            handDetected=hand_detected,
-            openHand=open_hand,
-            confidence=confidence,
-            x=hx, y=hy,
-            message='tracking' if hand_detected else 'show both hands near the bottom of the frame',
+        state = _state_from_detection(
+            face_detected=face_detected,
+            face_count=int(len(faces)),
+            face_cx=face_cx,
+            face_cy=face_cy,
+            face_forehead_y=face_forehead_y,
+            left_hand=left_hand,
+            right_hand=right_hand,
         )
 
         with state_lock:
