@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useHandStream } from './hooks/useHandStream'
 import { useVisionTracking } from './hooks/useVisionTracking'
+import type { CurrentInteraction } from './hooks/useVisionTracking'
 import CameraVideo from './components/CameraVideo'
 import { ThreeOverlay } from './components/ThreeOverlay'
 import { DebugOverlay } from './components/DebugOverlay'
@@ -16,15 +17,52 @@ const MILESTONES: Array<[number, string]> = [
   [500, '지식이 넘쳐흐릅니다'],
 ]
 
-
 const MILESTONE_MSGS = Object.fromEntries(MILESTONES)
 
-const INTERACTION_CAPTIONS: Record<string, string> = {
+const INTERACTION_CAPTIONS: Partial<Record<CurrentInteraction, string>> = {
   hovering:    '활자가 손 위에 떠 있습니다',
   scattering:  '활자가 흩어집니다',
   compressing: '활자가 모여듭니다',
   absorbing:   '지식이 뇌로 흡수됩니다',
   nearBrain:   '뇌에 가까워집니다',
+}
+
+function getReachedMilestone(
+  previousCount: number,
+  nextCount: number,
+  triggered: Set<number>,
+): number | null {
+  const milestone = MILESTONES.find(([count]) => (
+    previousCount < count && nextCount >= count && !triggered.has(count)
+  ))
+
+  return milestone?.[0] ?? null
+}
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
+}
+
+function StatusCorner({
+  connection,
+  isDemoMode,
+}: {
+  connection: 'connecting' | 'connected' | 'disconnected'
+  isDemoMode: boolean
+}) {
+  return (
+    <div className="status-corner">
+      <span className={`dot ${connection === 'connected' ? 'dot-on' : 'dot-off'}`} />
+      {connection !== 'connected' && (
+        <span className="status-text">
+          {connection === 'connecting' ? 'connecting…' : 'backend offline'}
+        </span>
+      )}
+      {connection === 'connected' && isDemoMode && (
+        <span className="status-text">demo mode</span>
+      )}
+    </div>
+  )
 }
 
 export default function App() {
@@ -74,15 +112,15 @@ export default function App() {
   const handleAbsorb = useCallback((count: number) => {
     setAbsorbedCount((prev) => {
       const next = prev + count
-      for (const [m] of MILESTONES) {
-        if (prev < m && next >= m && !milestoneTriggeredRef.current.has(m)) {
-          milestoneTriggeredRef.current.add(m)
-          setActiveMilestone(m)
-          if (milestoneTimerRef.current) clearTimeout(milestoneTimerRef.current)
-          milestoneTimerRef.current = window.setTimeout(() => setActiveMilestone(null), 3000)
-          break
-        }
+      const reachedMilestone = getReachedMilestone(prev, next, milestoneTriggeredRef.current)
+
+      if (reachedMilestone !== null) {
+        milestoneTriggeredRef.current.add(reachedMilestone)
+        setActiveMilestone(reachedMilestone)
+        if (milestoneTimerRef.current) clearTimeout(milestoneTimerRef.current)
+        milestoneTimerRef.current = window.setTimeout(() => setActiveMilestone(null), 3000)
       }
+
       return next
     })
   }, [])
@@ -97,7 +135,7 @@ export default function App() {
     if (!DEBUG_MODE) return
 
     const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      if (isTypingTarget(e.target)) return
 
       // Block particle/interaction keys while guide is open
       if (isGuideOpenRef.current && e.code !== 'KeyD') return
@@ -160,17 +198,7 @@ export default function App() {
       />
 
       {!debugMode && (
-        <div className="status-corner">
-          <span className={`dot ${connection === 'connected' ? 'dot-on' : 'dot-off'}`} />
-          {connection !== 'connected' && (
-            <span className="status-text">
-              {connection === 'connecting' ? 'connecting…' : 'backend offline'}
-            </span>
-          )}
-          {connection === 'connected' && isDemoMode && (
-            <span className="status-text">demo mode</span>
-          )}
-        </div>
+        <StatusCorner connection={connection} isDemoMode={isDemoMode} />
       )}
 
       {showHint && !debugMode && (
