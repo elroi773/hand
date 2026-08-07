@@ -39,6 +39,8 @@ function getReachedMilestone(
   return milestone?.[0] ?? null
 }
 
+
+
 function isTypingTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
 }
